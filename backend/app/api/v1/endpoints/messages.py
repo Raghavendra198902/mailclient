@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 import logging
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from email.utils import parsedate_to_datetime
 
 from app.core.database import get_db
@@ -107,19 +107,24 @@ async def get_messages(
         result = await db.execute(query)
         messages = result.scalars().all()
         
-        # Get total
-        count_query = select(Message).where(Message.account_id == account.id)
+        # Get total with efficient count query
+        count_query = select(func.count()).select_from(Message).where(Message.account_id == account.id)
         count_result = await db.execute(count_query)
-        total = len(count_result.scalars().all())
+        total = count_result.scalar()
+        
+        # Fetch all ML data in a single query (optimize N+1 problem)
+        message_ids = [msg.id for msg in messages]
+        ml_query = select(MessageML).where(MessageML.message_id.in_(message_ids))
+        ml_result = await db.execute(ml_query)
+        ml_records = ml_result.scalars().all()
+        
+        # Create a lookup dictionary for ML data
+        ml_data_map = {ml.message_id: ml for ml in ml_records}
         
         # Build response with ML data
         response_messages = []
         for msg in messages:
-            # Get ML data if exists
-            ml_result = await db.execute(
-                select(MessageML).where(MessageML.message_id == msg.id)
-            )
-            ml_record = ml_result.scalar_one_or_none()
+            ml_record = ml_data_map.get(msg.id)
             
             ml_data = None
             if ml_record:
@@ -206,10 +211,11 @@ async def sync_messages(
         
         logger.info(f"Using provider: {provider_name}")
         await provider.authenticate(credentials)
-        # For IMAP, this will fetch from multiple folders (20 per folder)
-        # For Gmail API, this will fetch recent messages
-        messages = await provider.list_messages(max_results=100)
-        logger.info(f"Fetched {len(messages)} messages from {provider_name}")
+        # FULL SYNC: Fetch from all Gmail labels (INBOX, SENT, STARRED, DRAFT, TRASH, SPAM, IMPORTANT, UNREAD, CATEGORY_*)
+        # For IMAP, this will fetch from multiple folders
+        # Increased to 500 messages per label for comprehensive sync
+        messages = await provider.list_messages(max_results=500)
+        logger.info(f"Fetched {len(messages)} messages from {provider_name} (full sync across all labels)")
         if messages:
             logger.info(f"First message sample: {messages[0]}")
         
@@ -229,10 +235,16 @@ async def sync_messages(
             received_date = datetime.now()
             if msg_data.get("date"):
                 try:
-                    received_date = parsedate_to_datetime(msg_data.get("date"))
+                    date_str = msg_data.get("date")
+                    if date_str:
+                        parsed_date = parsedate_to_datetime(date_str)
+                        if parsed_date:
+                            received_date = parsed_date
                 except (ValueError, TypeError):
                     try:
-                        received_date = datetime.fromisoformat(msg_data.get("date"))
+                        date_str = msg_data.get("date")
+                        if date_str:
+                            received_date = datetime.fromisoformat(date_str)
                     except:
                         pass
             

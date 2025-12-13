@@ -6,6 +6,7 @@ from datetime import datetime
 import re
 
 from app.core.config import settings
+from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -14,18 +15,12 @@ class EmailMLProcessor:
     """Process emails with AI/ML for insights"""
     
     def __init__(self):
-        self.openai_available = False
-        self.client = None
+        self.llm_service = llm_service
+        # Backwards compatibility
+        self.openai_available = bool(llm_service.default_provider)
+        self.client = llm_service.providers.get(llm_service.default_provider) if llm_service.default_provider else None
         
-        # Initialize OpenAI if available
-        if settings.OPENAI_API_KEY:
-            try:
-                from openai import AsyncOpenAI
-                self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-                self.openai_available = True
-                logger.info("OpenAI client initialized")
-            except Exception as e:
-                logger.warning(f"OpenAI not available: {e}")
+        logger.info(f"EmailMLProcessor initialized with LLM provider: {llm_service.default_provider}")
     
     async def process_message(self, message_data: Dict) -> Dict:
         """
@@ -77,38 +72,29 @@ class EmailMLProcessor:
             return {}
     
     async def _generate_summary(self, subject: str, body: str, max_length: int = 150) -> str:
-        """Generate AI summary of email"""
+        """Generate AI summary of email using LLM service"""
         
-        if self.openai_available and self.client:
-            try:
-                # Use OpenAI for high-quality summaries
-                text = f"Subject: {subject}\n\n{body}"[:1000]  # Limit input
-                
-                response = await self.client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are an email assistant. Summarize emails concisely in 1-2 sentences."},
-                        {"role": "user", "content": f"Summarize this email:\n\n{text}"}
-                    ],
-                    max_tokens=60,
-                    temperature=0.3
-                )
-                
-                return response.choices[0].message.content.strip()
-                
-            except Exception as e:
-                logger.warning(f"OpenAI summary failed: {e}")
-        
-        # Fallback: Extract first meaningful sentences
-        text = body.strip()
-        if not text:
-            return subject[:max_length]
-        
-        # Get first 1-2 sentences
-        sentences = re.split(r'[.!?]+', text)
-        summary = '. '.join([s.strip() for s in sentences[:2] if s.strip()])[:max_length]
-        
-        return summary if summary else subject[:max_length]
+        try:
+            # Use LLM service for high-quality summaries
+            summary = await self.llm_service.generate_email_summary(
+                subject=subject,
+                body=body,
+                style="short"
+            )
+            return summary[:max_length] if summary else subject[:max_length]
+        except Exception as e:
+            logger.warning(f"LLM summary failed: {e}")
+            
+            # Fallback: Extract first meaningful sentences
+            text = body.strip()
+            if not text:
+                return subject[:max_length]
+            
+            # Get first 1-2 sentences
+            sentences = re.split(r'[.!?]+', text)
+            summary = '. '.join([s.strip() for s in sentences[:2] if s.strip()])[:max_length]
+            
+            return summary if summary else subject[:max_length]
     
     def _calculate_priority(self, subject: str, body: str, from_email: str) -> tuple:
         """
@@ -298,44 +284,28 @@ class EmailMLProcessor:
         Returns:
             List of reply suggestions with labels
         """
-        # Try OpenAI first if available
-        if self.openai_available and self.client:
-            try:
-                prompt = f"""Generate {num_suggestions} {tone} email reply suggestions for the following email.
-
-Subject: {subject}
-Body: {body[:500]}
-
-Provide {num_suggestions} different reply options:
-1. A detailed response
-2. A brief acknowledgment
-3. A polite decline (if applicable)
-
-Each reply should be 1-3 sentences and maintain a {tone} tone.
-Format as JSON array with "label" and "text" fields."""
-
-                response = await self.client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are a helpful email assistant."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=300,
-                    temperature=0.7
-                )
-                
-                content = response.choices[0].message.content
-                # Try to parse JSON response
-                import json
-                try:
-                    replies = json.loads(content)
-                    if isinstance(replies, list) and len(replies) > 0:
-                        return replies[:num_suggestions]
-                except:
-                    pass
+        # Try LLM service first if available
+        try:
+            replies = await self.llm_service.generate_smart_replies(
+                subject=subject,
+                body=body,
+                sender=sender,
+                count=num_suggestions
+            )
+            
+            # Convert to expected format with labels
+            formatted_replies = []
+            for i, reply in enumerate(replies):
+                formatted_replies.append({
+                    'label': reply.get('tone', 'Reply').capitalize(),
+                    'text': reply.get('text', '')
+                })
+            
+            if formatted_replies:
+                return formatted_replies[:num_suggestions]
                     
-            except Exception as e:
-                logger.warning(f"OpenAI smart reply failed: {e}")
+        except Exception as e:
+            logger.warning(f"LLM smart reply failed: {e}")
         
         # Fallback: Template-based suggestions
         intent = self._classify_intent(subject, body)

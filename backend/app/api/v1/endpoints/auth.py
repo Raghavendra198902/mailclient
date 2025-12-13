@@ -57,9 +57,36 @@ async def gmail_callback(
         profile = service.users().getProfile(userId='me').execute()
         email = profile.get("emailAddress")
         
-        # Create access token
+        # Create or update account record with OAuth tokens
+        result = await db.execute(
+            select(Account).where(Account.email == email)
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            account = Account(
+                email=email,
+                provider='gmail',
+                access_token=credentials.token,
+                refresh_token=credentials.refresh_token,
+                token_expires_at=credentials.expiry,
+                is_active=True
+            )
+            db.add(account)
+        else:
+            account.provider = 'gmail'
+            account.access_token = credentials.token
+            account.refresh_token = credentials.refresh_token
+            account.token_expires_at = credentials.expiry
+            account.is_active = True
+        
+        await db.commit()
+        await db.refresh(account)
+        
+        # Create access token with account ID
         access_token = create_access_token(data={
-            "sub": email,
+            "sub": str(account.id),
+            "email": email,
             "provider": "gmail"
         })
         
@@ -67,6 +94,7 @@ async def gmail_callback(
             url=f"http://localhost:3000/auth/success?token={access_token}"
         )
     except Exception as e:
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Authentication failed: {str(e)}"

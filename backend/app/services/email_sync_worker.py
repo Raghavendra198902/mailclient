@@ -52,8 +52,8 @@ class EmailSyncWorker:
             provider = self.email_service.get_provider(account.provider)
             await provider.authenticate(credentials)
             
-            # Fetch messages
-            messages = await provider.list_messages(max_results=100)
+            # Fetch messages - FULL SYNC with 500 messages per label
+            messages = await provider.list_messages(max_results=500)
             
             # Store new messages
             synced_count = 0

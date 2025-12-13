@@ -40,12 +40,12 @@ export default function Dashboard() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'comfortable' | 'compact'>('comfortable');
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(false); // Disabled by default to prevent unnecessary requests
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   useEffect(() => {
     fetchMessages();
-  }, []); // Only fetch on mount
+  }, [selectedFolder]); // Re-fetch when folder changes
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -81,17 +81,18 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [messages]);
 
-  // Auto-refresh every 2 minutes
+  // Auto-refresh every 5 minutes (reduced from 2 minutes)
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
       fetchMessages();
       setLastRefresh(new Date());
-    }, 120000);
+    }, 300000); // 5 minutes
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, selectedFolder]);
 
   const fetchMessages = async () => {
+    const startTime = performance.now();
     try {
       setLoading(true);
       const token = localStorage.getItem('access_token');
@@ -103,14 +104,18 @@ export default function Dashboard() {
       }
 
       setHasToken(true);
-      const response = await fetch(`${API_URL}/api/v1/messages/`, {
+      const response = await fetch(`${API_URL}/api/v1/messages/?folder=${selectedFolder}&skip=0&limit=50`, {
         headers: {
           'Authorization': `Bearer ${token}`
-        }
+        },
+        cache: 'no-store' // Ensure fresh data
       });
 
       if (response.ok) {
         const data = await response.json();
+        const endTime = performance.now();
+        console.log(`⚡ Messages loaded in ${(endTime - startTime).toFixed(0)}ms`);
+        
         setMessages(data.messages || []);
         
         // Debug: Log first message labels to console
@@ -594,9 +599,24 @@ export default function Dashboard() {
               
               <div className="divide-y divide-slate-700/50 max-h-[calc(100vh-250px)] overflow-y-auto">
                 {loading ? (
-                  <div className="p-12 text-center text-slate-400">
-                    <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4" />
-                    <p>Loading messages...</p>
+                  <div className="space-y-3 p-4">
+                    {/* Skeleton Loading UI */}
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} className="animate-pulse bg-slate-800/50 rounded-lg p-4 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 bg-slate-700 rounded-full"></div>
+                          <div className="flex-1 space-y-2">
+                            <div className="h-4 bg-slate-700 rounded w-1/4"></div>
+                            <div className="h-3 bg-slate-700 rounded w-3/4"></div>
+                          </div>
+                          <div className="h-4 w-16 bg-slate-700 rounded"></div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="h-3 bg-slate-700 rounded w-full"></div>
+                          <div className="h-3 bg-slate-700 rounded w-5/6"></div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : filteredMessages.length === 0 ? (
                   !hasToken ? (
@@ -632,23 +652,33 @@ export default function Dashboard() {
                     <div className="p-12 text-center">
                       <Mail className="w-12 h-12 mx-auto mb-4 opacity-50 text-slate-400" />
                       <p className="text-slate-400 mb-4">No messages in {folders.find(f => f.id === selectedFolder)?.name}</p>
-                      <div className="mb-4 p-4 bg-slate-800/50 rounded-lg text-left max-w-lg mx-auto">
-                        <p className="text-xs text-slate-500 mb-2">Debug Info:</p>
-                        <p className="text-xs text-slate-400">Total messages: {messages.length}</p>
-                        <p className="text-xs text-slate-400">Current folder: {selectedFolder}</p>
-                        {messages.length > 0 && (
-                          <>
-                            <p className="text-xs text-slate-400 mt-2">Sample message labels:</p>
-                            <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
-                              {JSON.stringify(messages[0]?.labels, null, 2)}
-                            </pre>
-                            <p className="text-xs text-slate-400 mt-2">All unique labels in your messages:</p>
-                            <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
-                              {JSON.stringify([...new Set(messages.flatMap(m => m.labels || []))], null, 2)}
-                            </pre>
-                          </>
-                        )}
-                      </div>
+                      {selectedFolder !== 'inbox' && messages.length > 0 ? (
+                        <div className="mb-4 p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg text-left max-w-lg mx-auto">
+                          <p className="text-sm text-blue-300 mb-2">💡 Tip:</p>
+                          <p className="text-xs text-slate-400">
+                            You have {messages.length} messages in INBOX, but none in {folders.find(f => f.id === selectedFolder)?.name}.
+                            Click "Sync Messages" to fetch messages from all Gmail folders including SENT, TRASH, SPAM, and DRAFT.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="mb-4 p-4 bg-slate-800/50 rounded-lg text-left max-w-lg mx-auto">
+                          <p className="text-xs text-slate-500 mb-2">Debug Info:</p>
+                          <p className="text-xs text-slate-400">Total messages: {messages.length}</p>
+                          <p className="text-xs text-slate-400">Current folder: {selectedFolder}</p>
+                          {messages.length > 0 && (
+                            <>
+                              <p className="text-xs text-slate-400 mt-2">Sample message labels:</p>
+                              <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
+                                {JSON.stringify(messages[0]?.labels, null, 2)}
+                              </pre>
+                              <p className="text-xs text-slate-400 mt-2">All unique labels in your messages:</p>
+                              <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
+                                {JSON.stringify([...new Set(messages.flatMap(m => m.labels || []))], null, 2)}
+                              </pre>
+                            </>
+                          )}
+                        </div>
+                      )}
                       <motion.button
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
@@ -657,7 +687,7 @@ export default function Dashboard() {
                         className="px-4 py-2 bg-purple-600/20 text-purple-300 border border-purple-500/30 rounded-lg hover:bg-purple-600/30 transition-colors inline-flex items-center gap-2"
                       >
                         <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                        {syncing ? 'Syncing...' : 'Sync Messages'}
+                        {syncing ? 'Syncing...' : 'Sync Messages from All Folders'}
                       </motion.button>
                     </div>
                   )

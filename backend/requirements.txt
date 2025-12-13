@@ -19,6 +19,8 @@ python-dotenv==1.0.0
 
 # ML/AI Libraries
 openai==1.10.0
+anthropic==0.39.0
+google-generativeai==0.8.3
 transformers==4.37.0
 sentence-transformers==2.3.1
 torch==2.1.2

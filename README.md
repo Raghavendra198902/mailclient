@@ -5,7 +5,12 @@ Advanced email management system supporting Gmail, Outlook, Yahoo, and IMAP/SMTP
 ## Features
 
 - **Multi-Provider Support**: Gmail, Outlook, Yahoo, IMAP/SMTP, Exchange
+- **🆕 Multi-LLM Integration**: OpenAI, Anthropic Claude, Google Gemini, Local (Ollama)
 - **Multi-layer AI Processing**: Summarization, smart replies, tone/intent detection
+- **🆕 Advanced Email Drafting**: AI-powered email composition with context awareness
+- **🆕 Conversation Analysis**: Thread insights, action items, sentiment tracking
+- **🆕 Entity Extraction**: Automatic detection of people, dates, locations, contacts
+- **🆕 Email Rewriting**: Change tone and style with AI
 - **Phishing & Anomaly Detection**: ML-based security scanning
 - **Semantic Search**: Vector embeddings with FAISS
 - **Contact Intelligence**: Automated ranking and relationship graphs
@@ -71,7 +76,16 @@ cd frontend
 npm install
 ```
 
-5. **Run development servers**:
+5. **Configure LLM Providers** (Optional but recommended):
+```bash
+# Add to your .env file:
+OPENAI_API_KEY=sk-proj-...          # For OpenAI GPT models
+ANTHROPIC_API_KEY=sk-ant-...        # For Claude models
+GOOGLE_API_KEY=AIza...              # For Gemini models
+OLLAMA_BASE_URL=http://localhost:11434/v1  # For local models
+```
+
+6. **Run development servers**:
 ```bash
 # Backend (terminal 1)
 cd backend
@@ -82,10 +96,49 @@ cd frontend
 npm run dev
 ```
 
-6. **Access application**:
+7. **Access application**:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
+
+## 🆕 LLM Integration
+
+See [LLM_INTEGRATION.md](LLM_INTEGRATION.md) for detailed documentation.
+
+### Quick Setup
+
+**Option 1: Cloud LLM (OpenAI)**
+```bash
+export OPENAI_API_KEY=sk-proj-...
+docker-compose restart backend
+```
+
+**Option 2: Free Local LLM (Ollama)**
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model
+ollama pull llama3.2
+
+# No API key needed - works locally!
+```
+
+### Available Features
+- **Email Drafting**: Generate complete emails from context
+- **Smart Replies**: 3 contextual suggestions with different tones
+- **Conversation Analysis**: Thread insights and action items
+- **Entity Extraction**: Auto-detect names, dates, locations
+- **Email Rewriting**: Change tone (professional/casual/friendly)
+- **Generic Text Generation**: Any text generation task
+
+### API Endpoints
+- `POST /api/v1/llm/generate` - Generate text
+- `POST /api/v1/llm/draft-email` - Draft emails
+- `POST /api/v1/llm/analyze-conversation` - Analyze threads
+- `POST /api/v1/llm/extract-entities/{id}` - Extract entities
+- `GET /api/v1/llm/providers` - List available providers
+- `POST /api/v1/llm/rewrite-email/{id}` - Rewrite emails
 
 ## Gmail API Setup
 

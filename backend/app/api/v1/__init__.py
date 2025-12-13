@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     messages,
     ai,
     ml,
+    llm,
     health
 )
 
@@ -16,4 +17,5 @@ api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(messages.router, prefix="/messages", tags=["Messages"])
 api_router.include_router(ai.router, prefix="/ai", tags=["AI Services"])
 api_router.include_router(ml.router, prefix="/ml", tags=["ML Processing"])
+api_router.include_router(llm.router, prefix="/llm", tags=["LLM Integration"])
 api_router.include_router(health.router, prefix="/health", tags=["Health"])

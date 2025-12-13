@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     
     # ML Models
     OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
+    GOOGLE_API_KEY: str = ""
+    GOOGLE_MODEL: str = "gemini-1.5-flash"
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    LOCAL_MODEL: str = "llama3.2"
     HUGGINGFACE_TOKEN: str = ""
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     SUMMARIZATION_MODEL: str = "facebook/bart-large-cnn"
@@ -63,6 +70,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
+        "http://192.168.0.102:3000",  # Network access
+        "*",  # Allow all origins in development
     ]
     
     class Config:

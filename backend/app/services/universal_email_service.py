@@ -1,8 +1,11 @@
 """Universal Email Service - Supports Gmail, Outlook, Yahoo, IMAP/SMTP"""
 
+import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 import imaplib
 import email
 from email.header import decode_header
@@ -98,30 +101,58 @@ class GmailProvider(EmailProvider):
         except Exception:
             return False
     
-    async def list_messages(self, max_results: int = 100) -> List[Dict]:
-        """List Gmail messages with full details including labels from all folders"""
+    async def list_messages(self, max_results: int = 500) -> List[Dict]:
+        """List Gmail messages with full details including labels from all folders - FULL SYNC"""
         import base64
         import logging
         logger = logging.getLogger(__name__)
         
-        # Fetch messages from multiple label IDs to get all folders
-        # INBOX, SENT, STARRED, DRAFT, TRASH, SPAM
+        # Fetch messages from ALL Gmail labels for complete sync
+        # Including system labels, categories, and special folders
         all_message_ids = set()
-        labels_to_fetch = ['INBOX', 'SENT', 'STARRED', 'DRAFT', 'TRASH']
+        labels_to_fetch = [
+            'INBOX', 'SENT', 'STARRED', 'DRAFT', 'TRASH', 'SPAM',
+            'IMPORTANT', 'UNREAD',
+            'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS',
+            'CATEGORY_UPDATES', 'CATEGORY_FORUMS'
+        ]
         
         for label in labels_to_fetch:
             try:
-                results = self.service.users().messages().list(
-                    userId='me',
-                    labelIds=[label],
-                    maxResults=max_results
-                ).execute()
-                for msg in results.get('messages', []):
+                # Fetch ALL messages from this label (no maxResults limit for full sync)
+                page_token = None
+                label_messages = []
+                
+                while True:
+                    if page_token:
+                        results = self.service.users().messages().list(
+                            userId='me',
+                            labelIds=[label],
+                            pageToken=page_token
+                        ).execute()
+                    else:
+                        results = self.service.users().messages().list(
+                            userId='me',
+                            labelIds=[label],
+                            maxResults=500  # Max per request, will paginate for more
+                        ).execute()
+                    
+                    label_messages.extend(results.get('messages', []))
+                    page_token = results.get('nextPageToken')
+                    
+                    # Break if no more pages or we've fetched enough for this label
+                    if not page_token or len(label_messages) >= max_results:
+                        break
+                
+                for msg in label_messages[:max_results]:  # Limit per label to max_results
                     all_message_ids.add(msg['id'])
+                    
+                logger.info(f"Fetched {len(label_messages)} messages from {label} (added {min(len(label_messages), max_results)} unique IDs)")
             except Exception as e:
                 logger.warning(f"Failed to fetch from {label}: {e}")
                 continue
         
+        logger.info(f"Total unique message IDs across all labels: {len(all_message_ids)}")
         message_ids = [{'id': msg_id} for msg_id in all_message_ids]
         
         # Fetch full message data for each
