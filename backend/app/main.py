@@ -41,6 +41,29 @@ async def lifespan(app: FastAPI):
     
     logger.info("✅ Database initialized")
     
+    # Create demo user if not exists
+    from app.core.database import AsyncSessionLocal
+    from app.models.models import User
+    from sqlalchemy import select
+    from passlib.context import CryptContext
+    
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.email == "demo@mailmanager.com"))
+        demo_user = result.scalar_one_or_none()
+        if not demo_user:
+            demo_user = User(
+                email="demo@mailmanager.com",
+                full_name="Demo User",
+                hashed_password=pwd_context.hash("demo123"),
+                is_active=True
+            )
+            db.add(demo_user)
+            await db.commit()
+            logger.info("✅ Demo user created (demo@mailmanager.com / demo123)")
+        else:
+            logger.info("✅ Demo user exists")
+    
     # Start email sync worker in background
     worker = get_sync_worker(sync_interval=300)  # Sync every 5 minutes
     sync_task = asyncio.create_task(worker.run())
@@ -101,6 +124,30 @@ async def health_check():
     return {
         "status": "healthy",
         "version": "2.0.0"
+    }
+
+
+@app.post("/api/v1/auth/demo-login")
+async def demo_login():
+    """Quick demo login endpoint for development"""
+    from app.core.security import create_access_token
+    from datetime import timedelta
+    
+    # Create a long-lived token for demo (24 hours)
+    access_token = create_access_token(
+        data={"sub": "demo@mailmanager.com"},
+        expires_delta=timedelta(hours=24)
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": 1,
+            "email": "demo@mailmanager.com",
+            "full_name": "Demo User",
+            "is_active": True
+        }
     }
 
 

@@ -1,0 +1,835 @@
+'use client'
+
+import { motion, AnimatePresence } from 'framer-motion'
+import { 
+  Inbox, Send, Star, Archive, Trash2, Search, 
+  Filter, MoreVertical, 
+  RefreshCw, X, Reply, Forward,
+  AlertCircle, Eye, EyeOff, Sparkles,
+  Circle, CheckCircle
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import DashboardLayout from '@/components/DashboardLayout'
+
+interface Email {
+  id: string
+  subject: string
+  from_email: string
+  to_email: string
+  snippet: string
+  body_text?: string
+  body_html?: string
+  received_date: string
+  is_read: boolean
+  labels: string[]
+  ml_data?: {
+    summary_short?: string
+    priority_score?: number
+    tone_label?: string
+    intent_label?: string
+  }
+}
+
+export default function InboxPage() {
+  const router = useRouter()
+  const [emails, setEmails] = useState<Email[]>([])
+  const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedFolder, setSelectedFolder] = useState('inbox')
+  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
+  const [viewMode, setViewMode] = useState<'list' | 'detail'>('list')
+
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) {
+      router.push('/login')
+      return
+    }
+    fetchEmails()
+  }, [selectedFolder])
+
+  const fetchEmails = async () => {
+    try {
+      setLoading(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch(`http://localhost:8003/api/v1/messages/?folder=${selectedFolder}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setEmails(data.messages || [])
+      } else if (response.status === 401) {
+        router.push('/login')
+      }
+    } catch (error) {
+      console.error('Failed to fetch emails:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const syncEmails = async () => {
+    try {
+      setSyncing(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch('http://localhost:8003/api/v1/messages/sync', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+
+      if (response.ok) {
+        await fetchEmails()
+      }
+    } catch (error) {
+      console.error('Sync failed:', error)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const markAsRead = async (emailId: string, isRead: boolean) => {
+    try {
+      const token = localStorage.getItem('token')
+      await fetch(`http://localhost:8003/api/v1/messages/${emailId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ is_read: isRead })
+      })
+      fetchEmails()
+    } catch (error) {
+      console.error('Failed to update email:', error)
+    }
+  }
+
+  const deleteEmail = async (emailId: string) => {
+    try {
+      const token = localStorage.getItem('token')
+      await fetch(`http://localhost:8003/api/v1/messages/${emailId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      setSelectedEmail(null)
+      fetchEmails()
+    } catch (error) {
+      console.error('Failed to delete email:', error)
+    }
+  }
+
+  const toggleEmailSelection = (emailId: string) => {
+    const newSelection = new Set(selectedEmails)
+    if (newSelection.has(emailId)) {
+      newSelection.delete(emailId)
+    } else {
+      newSelection.add(emailId)
+    }
+    setSelectedEmails(newSelection)
+  }
+
+  const selectAllEmails = () => {
+    if (selectedEmails.size === filteredEmails.length) {
+      setSelectedEmails(new Set())
+    } else {
+      setSelectedEmails(new Set(filteredEmails.map(e => e.id)))
+    }
+  }
+
+  const bulkMarkAsRead = async (isRead: boolean) => {
+    for (const emailId of selectedEmails) {
+      await markAsRead(emailId, isRead)
+    }
+    setSelectedEmails(new Set())
+  }
+
+  const filteredEmails = emails.filter(email =>
+    email.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    email.from_email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    email.snippet.toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
+  const unreadCount = emails.filter(e => !e.is_read).length
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+
+    if (days === 0) {
+      return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    } else if (days === 1) {
+      return 'Yesterday'
+    } else if (days < 7) {
+      return date.toLocaleDateString('en-US', { weekday: 'short' })
+    } else {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    }
+  }
+
+  const getPriorityColor = (score?: number) => {
+    if (!score) return 'text-gray-400'
+    if (score > 0.7) return 'text-red-400'
+    if (score > 0.4) return 'text-yellow-400'
+    return 'text-green-400'
+  }
+
+  return (
+    <DashboardLayout>
+      {/* Email List / Detail View */}
+      <div className="flex-1 flex flex-col overflow-hidden h-[calc(100vh-80px)]">
+        {/* Top Bar */}
+        <div className="bg-black/30 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4 flex-1">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search emails..."
+                  className="w-full pl-12 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+                <Filter className="w-5 h-5 text-gray-400" />
+              </button>
+              <button
+                onClick={syncEmails}
+                disabled={syncing}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <RefreshCw className={`w-5 h-5 text-gray-400 ${syncing ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Bulk Actions */}
+          {selectedEmails.size > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 flex items-center gap-3 p-3 bg-purple-600/20 rounded-lg border border-purple-500/30"
+            >
+              <span className="text-sm text-gray-300">
+                {selectedEmails.size} selected
+              </span>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  onClick={() => bulkMarkAsRead(true)}
+                  className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <Eye className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => bulkMarkAsRead(false)}
+                  className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <EyeOff className="w-4 h-4" />
+                </button>
+                <button className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors">
+                  <Archive className="w-4 h-4" />
+                </button>
+                <button className="px-3 py-1.5 text-sm bg-red-600/20 hover:bg-red-600/30 rounded-lg transition-colors">
+                  <Trash2 className="w-4 h-4 text-red-400" />
+                </button>
+                <button
+                  onClick={() => setSelectedEmails(new Set())}
+                  className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 flex overflow-hidden" 
+        className="glass border-b border-white/10 sticky top-0 z-40 backdrop-blur-xl"
+        animate={{ marginLeft: showSidebar ? '256px' : '0' }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      >
+        <div className="container mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            {/* Sidebar Toggle */}
+            <motion.button
+              onClick={() => setShowSidebar(!showSidebar)}
+              className="p-2 hover:bg-white/10 rounded-xl transition-colors mr-4"
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <motion.div animate={{ rotate: showSidebar ? 180 : 0 }} transition={{ duration: 0.3 }}>
+                <Menu className="w-6 h-6 text-gray-300" />
+              </motion.div>
+            </motion.button>
+
+            <motion.div className="flex items-center gap-3" whileHover={{ scale: 1.05 }}>
+              <motion.div animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }} transition={{ duration: 3, repeat: Infinity }}>
+                <Mail className="w-8 h-8 text-purple-400" />
+              </motion.div>
+              <span className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+                Mail Manager Pro
+              </span>
+            </motion.div>
+
+            <motion.div className="flex-1 max-w-2xl mx-8" initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
+              <div className="relative group">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-purple-400 transition-colors" />
+                <input 
+                  type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search emails, contacts, or use AI commands..." 
+                  className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white placeholder-gray-400 focus:outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all" 
+                />
+              </div>
+            </motion.div>
+
+            <div className="flex items-center gap-3">
+              <motion.button className="relative p-3 hover:bg-white/10 rounded-xl transition-colors" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                <Bell className="w-6 h-6 text-gray-300" />
+                <motion.span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full" animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
+              </motion.button>
+
+              <Link href="/settings">
+                <motion.button className="p-3 hover:bg-white/10 rounded-xl transition-colors" whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.95 }}>
+                  <Settings className="w-6 h-6 text-gray-300" />
+                </motion.button>
+              </Link>
+
+              <motion.div className="flex items-center gap-3 ml-4 pl-4 border-l border-white/10 cursor-pointer" whileHover={{ scale: 1.05 }}>
+                <motion.div className="relative w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center font-bold text-white" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                  D
+                  <motion.div className="absolute inset-0 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 opacity-50 blur-xl" animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
+                </motion.div>
+                <div className="text-left hidden lg:block">
+                  <p className="text-sm font-medium text-white">Demo User</p>
+                  <p className="text-xs text-gray-400">demo@mailmanager.com</p>
+                </div>
+              </motion.div>
+
+              <Link href="/">
+                <motion.button className="ml-2 p-3 hover:bg-red-500/20 rounded-xl transition-colors group" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                  <ArrowLeft className="w-6 h-6 text-gray-300 group-hover:text-red-400 transition-colors" />
+                </motion.button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </motion.header>
+      
+      {/* Backdrop Overlay for Mobile */}
+      <AnimatePresence>
+        {showSidebar && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowSidebar(false)}
+            className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar */}
+      <AnimatePresence mode="wait">
+        {showSidebar && (
+          <motion.aside
+            key="sidebar"
+            initial={{ x: -280, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -280, opacity: 0 }}
+            transition={{ 
+              type: "spring", 
+              damping: 25, 
+              stiffness: 200,
+              opacity: { duration: 0.2 }
+            }}
+            className="fixed left-0 top-0 h-screen w-64 glass border-r border-white/10 z-50 flex flex-col"
+          >
+              {/* Sidebar Header */}
+              <div className="p-6 border-b border-white/10">
+                <motion.div className="flex items-center justify-between mb-4" whileHover={{ scale: 1.02 }}>
+                  <div className="flex items-center gap-3">
+                    <motion.div 
+                      className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl shadow-lg" 
+                      animate={{ rotate: [0, 5, 0, -5, 0] }} 
+                      transition={{ duration: 2, repeat: Infinity }}
+                      whileHover={{ rotate: 360, scale: 1.1 }}
+                    >
+                      <Mail className="w-6 h-6 text-white" />
+                    </motion.div>
+                    <div>
+                      <span className="text-lg font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent block">Mail Manager</span>
+                      <span className="text-xs text-gray-500">AI-Powered</span>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+
+              {/* Scrollable Content Area */}
+              <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-purple-500/50 scrollbar-track-transparent">
+                {/* Search Bar */}
+                <div className="px-4 pt-4 pb-2">
+                  <motion.div 
+                    className="relative"
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search emails..."
+                      className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all outline-none"
+                    />
+                  </motion.div>
+                </div>
+
+                {/* Mail Folders */}
+                <div className="p-4 pt-2">
+                  <motion.p 
+                    className="px-4 mb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2"
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.1 }}
+                  >
+                    <Mail className="w-3 h-3" />
+                    Mail Folders
+                  </motion.p>
+                  <motion.div 
+                    className="space-y-1" 
+                    initial="hidden" 
+                    animate="visible" 
+                    variants={{ 
+                      visible: { 
+                        transition: { 
+                          staggerChildren: 0.08,
+                          delayChildren: 0.2
+                        } 
+                      }, 
+                      hidden: {} 
+                    }}
+                  >
+                    {folders.map((folder) => {
+                      const Icon = folder.icon
+                      const isActive = selectedFolder === folder.id
+                      const count = folder.id === 'inbox' ? unreadCount : 0
+
+                      return (
+                        <motion.button
+                          key={folder.id}
+                          variants={{ 
+                            visible: { 
+                              opacity: 1, 
+                              x: 0,
+                              transition: {
+                                type: "spring",
+                                stiffness: 300,
+                                damping: 24
+                              }
+                            }, 
+                            hidden: { 
+                              opacity: 0, 
+                              x: -20 
+                            } 
+                          }}
+                          whileHover={{ scale: 1.03, x: 8 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={() => setSelectedFolder(folder.id)}
+                          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all group ${
+                            isActive
+                              ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 shadow-lg shadow-purple-500/20'
+                              : 'hover:bg-white/5 border border-transparent hover:border-purple-500/20'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <motion.div
+                              whileHover={{ rotate: 360 }}
+                              transition={{ duration: 0.6 }}
+                            >
+                              <Icon className={`w-5 h-5 ${ isActive ? 'text-purple-400' : 'text-gray-400 group-hover:text-purple-300' }`} />
+                            </motion.div>
+                            <span className={`text-sm font-medium ${ isActive ? 'text-white' : 'text-gray-300 group-hover:text-white' }`}>
+                              {folder.label}
+                            </span>
+                          </div>
+                          {count > 0 && (
+                            <motion.span
+                              className="px-2 py-0.5 bg-purple-500/30 text-purple-300 rounded-full text-xs font-medium"
+                              animate={{ scale: [1, 1.1, 1] }}
+                              transition={{ duration: 2, repeat: Infinity }}
+                            >
+                              {count}
+                            </motion.span>
+                          )}
+                        </motion.button>
+                      )
+                    })}
+                  </motion.div>
+                </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div className="p-4 border-t border-white/10 space-y-2">
+                <Link href="/compose">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="w-full py-2.5 px-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold text-white text-sm shadow-lg transition-all flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Compose
+                  </motion.button>
+                </Link>
+                
+                <button
+                  onClick={syncEmails}
+                  disabled={syncing}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+                  {syncing ? 'Syncing...' : 'Sync Emails'}
+                </button>
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+
+        {/* Main Content */}
+        <motion.div
+          className="flex-1 flex flex-col overflow-hidden"
+          animate={{ marginLeft: showSidebar ? '256px' : '0' }}
+          transition={{ type: "spring", damping: 25, stiffness: 200 }}
+          style={{ maxWidth: showSidebar ? 'calc(100vw - 256px)' : '100vw' }}
+        >
+          {/* Top Bar */}
+          <div className="bg-black/30 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4 flex-1">
+                <button
+                  onClick={() => setShowSidebar(!showSidebar)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <Menu className="w-5 h-5 text-gray-400" />
+                </button>
+
+                <div className="relative flex-1 max-w-xl">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search emails..."
+                    className="w-full pl-12 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+                  <Filter className="w-5 h-5 text-gray-400" />
+                </button>
+                <button
+                  onClick={syncEmails}
+                  disabled={syncing}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <RefreshCw className={`w-5 h-5 text-gray-400 ${syncing ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Bulk Actions */}
+            {selectedEmails.size > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 flex items-center gap-3 p-3 bg-purple-600/20 rounded-lg border border-purple-500/30"
+              >
+                <span className="text-sm text-gray-300">
+                  {selectedEmails.size} selected
+                </span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    onClick={() => bulkMarkAsRead(true)}
+                    className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => bulkMarkAsRead(false)}
+                    className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                  >
+                    <EyeOff className="w-4 h-4" />
+                  </button>
+                  <button className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors">
+                    <Archive className="w-4 h-4" />
+                  </button>
+                  <button className="px-3 py-1.5 text-sm bg-red-600/20 hover:bg-red-600/30 rounded-lg transition-colors">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </button>
+                  <button
+                    onClick={() => setSelectedEmails(new Set())}
+                    className="px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </div>
+
+          {/* Email List / Detail View */}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Email List */}
+            <div className={`${selectedEmail ? 'w-1/2' : 'w-full'} border-r border-white/10 overflow-y-auto`}>
+              {loading ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mx-auto mb-4" />
+                    <p className="text-gray-400">Loading emails...</p>
+                  </div>
+                </div>
+              ) : filteredEmails.length === 0 ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <Inbox className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-400 mb-2">No emails</h3>
+                    <p className="text-gray-500">
+                      {searchQuery ? 'No emails match your search' : `Your ${selectedFolder} is empty`}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  {/* Select All */}
+                  <div className="sticky top-0 z-10 bg-black/50 backdrop-blur-xl border-b border-white/10 px-6 py-3">
+                    <button
+                      onClick={selectAllEmails}
+                      className="flex items-center gap-3 text-sm text-gray-400 hover:text-white transition-colors"
+                    >
+                      {selectedEmails.size === filteredEmails.length ? (
+                        <CheckCircle className="w-5 h-5 text-purple-400" />
+                      ) : (
+                        <Circle className="w-5 h-5" />
+                      )}
+                      Select All
+                    </button>
+                  </div>
+
+                  {filteredEmails.map((email) => (
+                    <motion.div
+                      key={email.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      whileHover={{ backgroundColor: 'rgba(255, 255, 255, 0.03)' }}
+                      onClick={() => {
+                        setSelectedEmail(email)
+                        if (!email.is_read) {
+                          markAsRead(email.id, true)
+                        }
+                      }}
+                      className={`px-6 py-4 border-b border-white/5 cursor-pointer transition-colors ${
+                        !email.is_read ? 'bg-purple-500/5' : ''
+                      } ${selectedEmail?.id === email.id ? 'bg-purple-600/10' : ''}`}
+                    >
+                      <div className="flex items-start gap-4">
+                        {/* Checkbox */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleEmailSelection(email.id)
+                          }}
+                          className="mt-1"
+                        >
+                          {selectedEmails.has(email.id) ? (
+                            <CheckCircle className="w-5 h-5 text-purple-400" />
+                          ) : (
+                            <Circle className="w-5 h-5 text-gray-600 hover:text-gray-400" />
+                          )}
+                        </button>
+
+                        {/* Email Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3 mb-1">
+                            <span className={`font-semibold truncate ${!email.is_read ? 'text-white' : 'text-gray-300'}`}>
+                              {email.from_email.split('<')[0].trim() || email.from_email}
+                            </span>
+                            {email.ml_data?.priority_score && email.ml_data.priority_score > 0.5 && (
+                              <span className={`flex items-center gap-1 text-xs ${getPriorityColor(email.ml_data.priority_score)}`}>
+                                <AlertCircle className="w-3 h-3" />
+                                Priority
+                              </span>
+                            )}
+                            {email.labels.includes('STARRED') && (
+                              <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
+                            )}
+                          </div>
+
+                          <h3 className={`text-sm mb-1 truncate ${!email.is_read ? 'font-semibold text-white' : 'text-gray-400'}`}>
+                            {email.subject || '(No subject)'}
+                          </h3>
+
+                          <p className="text-sm text-gray-500 truncate">
+                            {email.ml_data?.summary_short || email.snippet}
+                          </p>
+
+                          {email.ml_data?.tone_label && (
+                            <div className="flex items-center gap-2 mt-2">
+                              <span className="text-xs px-2 py-0.5 bg-purple-600/20 text-purple-300 rounded-full">
+                                {email.ml_data.tone_label}
+                              </span>
+                              {email.ml_data.intent_label && (
+                                <span className="text-xs px-2 py-0.5 bg-blue-600/20 text-blue-300 rounded-full">
+                                  {email.ml_data.intent_label}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Time */}
+                        <div className="flex flex-col items-end gap-2">
+                          <span className="text-xs text-gray-500">
+                            {formatDate(email.received_date)}
+                          </span>
+                          {!email.is_read && (
+                            <div className="w-2 h-2 bg-purple-500 rounded-full" />
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Email Detail Panel */}
+            <AnimatePresence>
+              {selectedEmail && (
+                <motion.div
+                  initial={{ x: 100, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: 100, opacity: 0 }}
+                  className="w-1/2 bg-black/20 overflow-y-auto"
+                >
+                  {/* Detail Header */}
+                  <div className="sticky top-0 z-10 bg-black/50 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <button
+                        onClick={() => setSelectedEmail(null)}
+                        className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                      >
+                        <X className="w-5 h-5 text-gray-400" />
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => router.push(`/compose?reply=${selectedEmail.id}`)}
+                          className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                          title="Reply"
+                        >
+                          <Reply className="w-5 h-5 text-gray-400" />
+                        </button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Forward">
+                          <Forward className="w-5 h-5 text-gray-400" />
+                        </button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Star">
+                          <Star className="w-5 h-5 text-gray-400" />
+                        </button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Archive">
+                          <Archive className="w-5 h-5 text-gray-400" />
+                        </button>
+                        <button
+                          onClick={() => deleteEmail(selectedEmail.id)}
+                          className="p-2 hover:bg-red-600/20 rounded-lg transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-5 h-5 text-red-400" />
+                        </button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+                          <MoreVertical className="w-5 h-5 text-gray-400" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <h2 className="text-2xl font-bold text-white mb-4">
+                      {selectedEmail.subject || '(No subject)'}
+                    </h2>
+
+                    <div className="space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold">
+                          {selectedEmail.from_email[0].toUpperCase()}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-white">
+                              {selectedEmail.from_email.split('<')[0].trim() || selectedEmail.from_email}
+                            </span>
+                            <span className="text-sm text-gray-500">
+                              {formatDate(selectedEmail.received_date)}
+                            </span>
+                          </div>
+                          <div className="text-sm text-gray-400">
+                            to {selectedEmail.to_email}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Email Body */}
+                  <div className="px-6 py-6">
+                    {/* AI Summary */}
+                    {selectedEmail.ml_data?.summary_short && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mb-6 p-4 bg-gradient-to-r from-purple-600/10 to-pink-600/10 rounded-xl border border-purple-500/20"
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <Sparkles className="w-4 h-4 text-purple-400" />
+                          <span className="text-sm font-semibold text-purple-300">AI Summary</span>
+                        </div>
+                        <p className="text-sm text-gray-300">
+                          {selectedEmail.ml_data.summary_short}
+                        </p>
+                      </motion.div>
+                    )}
+
+                    {/* Email Content */}
+                    <div className="prose prose-invert max-w-none">
+                      {selectedEmail.body_html ? (
+                        <div
+                          dangerouslySetInnerHTML={{ __html: selectedEmail.body_html }}
+                          className="text-gray-300"
+                        />
+                      ) : (
+                        <pre className="whitespace-pre-wrap text-gray-300 font-sans">
+                          {selectedEmail.body_text}
+                        </pre>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.div>
+    </div>
+  )
+}

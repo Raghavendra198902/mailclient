@@ -39,8 +39,17 @@ class EmailProvider(ABC):
         pass
     
     @abstractmethod
-    async def send_message(self, to: str, subject: str, body: str) -> bool:
-        """Send message"""
+    async def send_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        body_html: Optional[str] = None,
+        attachments: Optional[List[Dict]] = None
+    ) -> bool:
+        """Send message with full support for cc, bcc, HTML, and attachments"""
         pass
 
 
@@ -227,16 +236,69 @@ class GmailProvider(EmailProvider):
         ).execute()
         return message
     
-    async def send_message(self, to: str, subject: str, body: str) -> bool:
-        """Send Gmail message"""
+    async def send_message(
+        self, 
+        to: str, 
+        subject: str, 
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        body_html: Optional[str] = None,
+        attachments: Optional[List[Dict]] = None
+    ) -> bool:
+        """Send Gmail message with full support for HTML, cc, bcc, and attachments"""
         try:
-            message = MIMEText(body)
+            import base64
+            from email.mime.base import MIMEBase
+            from email import encoders
+            
+            # Create multipart message if HTML or attachments
+            if body_html or attachments:
+                message = MIMEMultipart('alternative' if body_html else 'mixed')
+                
+                # Add text body
+                text_part = MIMEText(body, 'plain')
+                message.attach(text_part)
+                
+                # Add HTML body if provided
+                if body_html:
+                    html_part = MIMEText(body_html, 'html')
+                    message.attach(html_part)
+                
+                # Add attachments if provided
+                if attachments:
+                    for attachment in attachments:
+                        part = MIMEBase('application', 'octet-stream')
+                        # Decode base64 content
+                        content = base64.b64decode(attachment.get('content', ''))
+                        part.set_payload(content)
+                        encoders.encode_base64(part)
+                        part.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename={attachment.get("filename", "file")}'
+                        )
+                        message.attach(part)
+            else:
+                message = MIMEText(body, 'plain')
+            
             message['to'] = to
+            if cc:
+                message['cc'] = cc
+            if bcc:
+                message['bcc'] = bcc
             message['subject'] = subject
-            raw = {'raw': message.as_string()}
-            self.service.users().messages().send(userId='me', body=raw).execute()
+            
+            # Encode and send
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            self.service.users().messages().send(
+                userId='me',
+                body={'raw': raw_message}
+            ).execute()
+            
+            logger.info(f"Email sent successfully to {to}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to send Gmail message: {e}")
             return False
 
 
@@ -441,22 +503,61 @@ class IMAPProvider(EmailProvider):
         except Exception:
             return {}
     
-    async def send_message(self, to: str, subject: str, body: str) -> bool:
-        """Send SMTP message"""
+    async def send_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        body_html: Optional[str] = None,
+        attachments: Optional[List[Dict]] = None
+    ) -> bool:
+        """Send SMTP message with full support for HTML, cc, bcc, and attachments"""
         try:
-            msg = MIMEMultipart()
+            import base64
+            from email.mime.base import MIMEBase
+            from email import encoders
+            
+            msg = MIMEMultipart('alternative' if body_html else 'mixed')
             msg['From'] = self.username
             msg['To'] = to
+            if cc:
+                msg['Cc'] = cc
+            if bcc:
+                msg['Bcc'] = bcc
             msg['Subject'] = subject
+            
+            # Add text body
             msg.attach(MIMEText(body, 'plain'))
+            
+            # Add HTML body if provided
+            if body_html:
+                msg.attach(MIMEText(body_html, 'html'))
+            
+            # Add attachments if provided
+            if attachments:
+                for attachment in attachments:
+                    part = MIMEBase('application', 'octet-stream')
+                    content = base64.b64decode(attachment.get('content', ''))
+                    part.set_payload(content)
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        'Content-Disposition',
+                        f'attachment; filename={attachment.get("filename", "file")}'
+                    )
+                    msg.attach(part)
             
             server = smtplib.SMTP(self.smtp_server, settings.SMTP_PORT)
             server.starttls()
             server.login(self.username, self.password)
             server.send_message(msg)
             server.quit()
+            
+            logger.info(f"SMTP email sent successfully to {to}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to send SMTP message: {e}")
             return False
 
 
@@ -586,9 +687,19 @@ class OutlookProvider(EmailProvider):
             logger.error(f"Failed to get Outlook message: {e}")
             return {}
     
-    async def send_message(self, to: str, subject: str, body: str) -> bool:
-        """Send Outlook message"""
+    async def send_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        body_html: Optional[str] = None,
+        attachments: Optional[List[Dict]] = None
+    ) -> bool:
+        """Send Outlook message with full support for HTML, cc, bcc, and attachments"""
         import httpx
+        import base64
         
         try:
             headers = {
@@ -596,30 +707,53 @@ class OutlookProvider(EmailProvider):
                 'Content-Type': 'application/json'
             }
             
-            message = {
+            # Build recipients
+            to_recipients = [{'emailAddress': {'address': to}}]
+            cc_recipients = [{'emailAddress': {'address': cc}}] if cc else []
+            bcc_recipients = [{'emailAddress': {'address': bcc}}] if bcc else []
+            
+            # Build message
+            message_data = {
                 'message': {
                     'subject': subject,
                     'body': {
-                        'contentType': 'HTML',
-                        'content': body
+                        'contentType': 'HTML' if body_html else 'Text',
+                        'content': body_html or body
                     },
-                    'toRecipients': [{'emailAddress': {'address': to}}]
-                },
-                'saveToSentItems': 'true'
+                    'toRecipients': to_recipients
+                }
             }
+            
+            if cc_recipients:
+                message_data['message']['ccRecipients'] = cc_recipients
+            if bcc_recipients:
+                message_data['message']['bccRecipients'] = bcc_recipients
+            
+            # Add attachments if provided
+            if attachments:
+                message_data['message']['attachments'] = []
+                for attachment in attachments:
+                    message_data['message']['attachments'].append({
+                        '@odata.type': '#microsoft.graph.fileAttachment',
+                        'name': attachment.get('filename', 'file'),
+                        'contentType': attachment.get('mimetype', 'application/octet-stream'),
+                        'contentBytes': attachment.get('content', '')
+                    })
+            
+            message_data['saveToSentItems'] = 'true'
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.graph_endpoint}/me/sendMail",
                     headers=headers,
-                    json=message
+                    json=message_data
                 )
                 response.raise_for_status()
             
-            logger.info(f"Email sent to {to}")
+            logger.info(f"Outlook email sent successfully to {to}")
             return True
         except Exception as e:
-            logger.error(f"Failed to send email: {e}")
+            logger.error(f"Failed to send Outlook email: {e}")
             return False
 
 

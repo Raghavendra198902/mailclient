@@ -1,829 +1,1147 @@
-'use client';
+'use client'
 
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion'
 import { 
-  Mail, Star, Send, Archive, Trash2, Inbox, RefreshCw, LogOut, 
-  Sparkles, AlertCircle, Clock, TrendingUp, Edit, Zap, Filter, SortDesc,
-  Search, Command, MoreVertical, CheckSquare, Square, List, Grid, Keyboard,
-  Move, Tag, Eye, EyeOff, Download, Share2, Flag
-} from 'lucide-react';
+  Mail, Settings, Bell, LogOut, Send, Archive, Inbox, 
+  Zap, BarChart3, Users, Clock, Search,
+  MessageSquare, Activity, Sparkles, Brain, Target, Award,
+  ArrowUp, ChevronRight, Download, Share2, TrendingUp,
+  Menu, X, Home, FolderOpen, Star, Tag, FileText, Trash2,
+  Filter, Calendar, PieChart, HelpCircle, Shield, UserCircle,
+  LayoutDashboard, BookOpen, Boxes, AlertCircle
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
-interface Message {
-  id: string;
-  subject: string;
-  from_email: string;
-  snippet: string;
-  received_date: string;
-  is_read: boolean;
-  labels?: string[];
-  ml_data?: {
-    summary?: string;
-    priority_score?: number;
-    sentiment?: string;
-    intent?: string;
-  };
-}
-
-export default function Dashboard() {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8003';
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [selectedFolder, setSelectedFolder] = useState('inbox');
-  const [hasToken, setHasToken] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [syncSuccess, setSyncSuccess] = useState(false);
-  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState('');
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'comfortable' | 'compact'>('comfortable');
-  const [autoRefresh, setAutoRefresh] = useState(false); // Disabled by default to prevent unnecessary requests
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
-
-  useEffect(() => {
-    fetchMessages();
-  }, [selectedFolder]); // Re-fetch when folder changes
+export default function DashboardPage() {
+  const router = useRouter()
+  const [user, setUser] = useState<any>(null)
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+  const [selectedTimeframe, setSelectedTimeframe] = useState('week')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [activeMenu, setActiveMenu] = useState('dashboard')
+  const [stats, setStats] = useState<any[]>([])
+  const [recentEmails, setRecentEmails] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const { scrollY } = useScroll()
+  const headerOpacity = useTransform(scrollY, [0, 100], [1, 0.95])
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      // Command palette: Cmd/Ctrl + K
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setCommandPaletteOpen(prev => !prev);
+      // Toggle sidebar with Ctrl/Cmd + B
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault()
+        setSidebarOpen(!sidebarOpen)
       }
-      // Compose: C
-      if (e.key === 'c' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
-        // Open compose modal
+      // Compose email with C key
+      if (e.key === 'c' && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault()
+        router.push('/compose')
       }
-      // Refresh: R
-      if (e.key === 'r' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT') {
-        handleSync();
-      }
-      // Select all: Cmd/Ctrl + A
-      if ((e.metaKey || e.ctrlKey) && e.key === 'a' && document.activeElement?.tagName !== 'INPUT') {
-        e.preventDefault();
-        const allIds = new Set(messages.map(m => m.id));
-        setSelectedMessages(allIds);
-      }
-      // Escape: Clear selection or close panels
-      if (e.key === 'Escape') {
-        setSelectedMessages(new Set());
-        setCommandPaletteOpen(false);
-        setQuickActionsOpen(false);
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [messages]);
+    }
 
-  // Auto-refresh every 5 minutes (reduced from 2 minutes)
+    window.addEventListener('keydown', handleKeyPress)
+    return () => window.removeEventListener('keydown', handleKeyPress)
+  }, [sidebarOpen])
+
   useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchMessages();
-      setLastRefresh(new Date());
-    }, 300000); // 5 minutes
-    return () => clearInterval(interval);
-  }, [autoRefresh, selectedFolder]);
+    const token = localStorage.getItem('token')
+    if (!token) {
+      router.push('/login')
+      return
+    }
 
-  const fetchMessages = async () => {
-    const startTime = performance.now();
+    const userData = localStorage.getItem('user')
+    if (userData) {
+      setUser(JSON.parse(userData))
+    }
+
+    fetchDashboardData()
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY })
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => window.removeEventListener('mousemove', handleMouseMove)
+  }, [router])
+
+  const fetchDashboardData = async () => {
+    setLoading(true)
     try {
-      setLoading(true);
-      const token = localStorage.getItem('access_token');
+      const token = localStorage.getItem('token')
       
-      if (!token) {
-        setHasToken(false);
-        setLoading(false);
-        return;
+      // Fetch dashboard stats
+      const statsResponse = await fetch('http://localhost:8003/api/v1/messages/stats', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      
+      if (statsResponse.ok) {
+        const statsData = await statsResponse.json()
+        setStats([
+          { label: 'Total Emails', value: statsData.total?.toString() || '0', icon: Mail, color: 'from-blue-500 via-blue-600 to-cyan-500', change: '+12.5%', trend: 'up', subtitle: 'This week' },
+          { label: 'Unread', value: statsData.unread?.toString() || '0', icon: Inbox, color: 'from-purple-500 via-purple-600 to-pink-500', change: '+5.2%', trend: 'up', subtitle: 'Needs attention' },
+          { label: 'Sent Today', value: statsData.sent_today?.toString() || '0', icon: Send, color: 'from-green-500 via-green-600 to-emerald-500', change: '+8.1%', trend: 'up', subtitle: 'Outgoing' },
+          { label: 'Response Rate', value: '94%', icon: Target, color: 'from-orange-500 via-orange-600 to-red-500', change: '+2.3%', trend: 'up', subtitle: 'Performance' },
+        ])
       }
 
-      setHasToken(true);
-      const response = await fetch(`${API_URL}/api/v1/messages/?folder=${selectedFolder}&skip=0&limit=50`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        cache: 'no-store' // Ensure fresh data
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const endTime = performance.now();
-        console.log(`⚡ Messages loaded in ${(endTime - startTime).toFixed(0)}ms`);
-        
-        setMessages(data.messages || []);
-        
-        // Debug: Log first message labels to console
-        if (data.messages && data.messages.length > 0) {
-          console.log('Sample message labels:', data.messages[0].labels);
-          console.log('Total messages loaded:', data.messages.length);
-          
-          // Show label distribution
-          const labelCounts: Record<string, number> = {};
-          data.messages.forEach((msg: Message) => {
-            msg.labels?.forEach(label => {
-              labelCounts[label] = (labelCounts[label] || 0) + 1;
-            });
-          });
-          console.log('Label distribution:', labelCounts);
-        }
-      } else if (response.status === 401) {
-        localStorage.removeItem('access_token');
-        window.location.href = '/connect';
+      // Fetch recent emails
+      const emailsResponse = await fetch('http://localhost:8003/api/v1/messages?limit=5', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      
+      if (emailsResponse.ok) {
+        const emailsData = await emailsResponse.json()
+        const emails = Array.isArray(emailsData) ? emailsData : (emailsData.messages || emailsData.data || [])
+        setRecentEmails(emails.map((email: any) => ({
+          from: email.sender_name || email.sender_email,
+          subject: email.subject,
+          time: new Date(email.received_at).toLocaleString(),
+          unread: !email.is_read,
+          priority: 'medium',
+          category: 'work',
+          avatar: (email.sender_name || 'U').substring(0, 2).toUpperCase(),
+        })))
       }
     } catch (error) {
-      console.error('Failed to fetch messages:', error);
+      console.error('Failed to fetch dashboard data:', error)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleLogout = () => {
-    localStorage.removeItem('access_token');
-    window.location.href = '/';
-  };
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    router.push('/')
+  }
 
-  const handleSync = async () => {
-    setSyncing(true);
-    setSyncError(null);
-    setSyncSuccess(false);
-    try {
-      const token = localStorage.getItem('access_token');
-      console.log('Starting sync with token:', token ? 'present' : 'missing');
-      
-      const response = await fetch(`${API_URL}/api/v1/messages/sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950 flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-white text-xl flex items-center gap-3"
+        >
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+            className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full"
+          />
+          Loading Dashboard...
+        </motion.div>
+      </div>
+    )
+  }
 
-      console.log('Sync response status:', response.status);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Sync failed' }));
-        throw new Error(errorData.detail || 'Failed to sync messages');
-      }
+  const firstName = user.full_name?.split(' ')[0] || 'User'
 
-      const result = await response.json();
-      console.log('Sync result:', result);
-      
-      await fetchMessages();
-      setSyncSuccess(true);
-      setTimeout(() => setSyncSuccess(false), 3000);
-    } catch (error) {
-      console.error('Sync failed:', error);
-      setSyncError(error instanceof Error ? error.message : 'Failed to sync messages');
-      setTimeout(() => setSyncError(null), 5000);
-    } finally {
-      setSyncing(false);
-    }
-  };
+  const statsDisplay = stats.length > 0 ? stats : [
+    { label: 'Total Emails', value: '0', icon: Mail, color: 'from-blue-500 via-blue-600 to-cyan-500', change: '+0%', trend: 'up', subtitle: 'This week' },
+    { label: 'Unread', value: '0', icon: Inbox, color: 'from-purple-500 via-purple-600 to-pink-500', change: '+0%', trend: 'up', subtitle: 'Needs attention' },
+    { label: 'Sent Today', value: '0', icon: Send, color: 'from-green-500 via-green-600 to-emerald-500', change: '+0%', trend: 'up', subtitle: 'Outgoing' },
+    { label: 'Response Rate', value: '0%', icon: Target, color: 'from-orange-500 via-orange-600 to-red-500', change: '+0%', trend: 'up', subtitle: 'Performance' },
+  ]
 
-  const folders = [
-    { 
-      id: 'inbox', 
-      name: 'Inbox', 
-      icon: Inbox, 
-      count: messages.length
-    },
-    { 
-      id: 'starred', 
-      name: 'Starred', 
-      icon: Star, 
-      count: messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('STAR') || label.toUpperCase().includes('IMPORTANT'))).length 
-    },
-    { 
-      id: 'sent', 
-      name: 'Sent', 
-      icon: Send, 
-      count: messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('SENT'))).length 
-    },
-    { 
-      id: 'archive', 
-      name: 'Archive', 
-      icon: Archive, 
-      count: messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('ARCHIV'))).length 
-    },
-    { 
-      id: 'trash', 
-      name: 'Trash', 
-      icon: Trash2, 
-      count: messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('TRASH'))).length 
-    }
-  ];
+  const recentEmailsDisplay = recentEmails.length > 0 ? recentEmails : []
 
-  const unreadCount = messages.filter(m => !m.is_read).length;
-  const highPriorityCount = messages.filter(m => {
-    const priority = m.ml_data?.priority_score || 0;
-    return priority > 0.7;
-  }).length;
+  const quickActions = [
+    { label: 'Compose', icon: Mail, color: 'from-blue-500 to-cyan-500', description: 'New email', gradient: 'bg-gradient-to-br from-blue-500/20 to-cyan-500/20' },
+    { label: 'AI Reply', icon: Sparkles, color: 'from-purple-500 to-pink-500', description: 'Smart compose', gradient: 'bg-gradient-to-br from-purple-500/20 to-pink-500/20' },
+    { label: 'Analytics', icon: BarChart3, color: 'from-green-500 to-emerald-500', description: 'View insights', gradient: 'bg-gradient-to-br from-green-500/20 to-emerald-500/20' },
+    { label: 'Team Inbox', icon: Users, color: 'from-orange-500 to-red-500', description: 'Collaborate', gradient: 'bg-gradient-to-br from-orange-500/20 to-red-500/20' },
+  ]
 
-  // Filter messages based on selected folder
-  const getFilteredMessages = () => {
-    let filtered = messages;
-    
-    // Folder filter
-    switch (selectedFolder) {
-      case 'inbox':
-        filtered = messages;
-        break;
-      case 'starred':
-        filtered = messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('STARRED')));
-        break;
-      case 'sent':
-        filtered = messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('SENT')));
-        break;
-      case 'archive':
-        filtered = messages.filter(m => !m.labels?.some(label => label.toUpperCase().includes('INBOX')) && !m.labels?.some(label => label.toUpperCase().includes('TRASH')));
-        break;
-      case 'trash':
-        filtered = messages.filter(m => m.labels?.some(label => label.toUpperCase().includes('TRASH')));
-        break;
-      default:
-        filtered = messages;
-    }
-    
-    // Search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(m => 
-        m.subject.toLowerCase().includes(query) ||
-        m.from_email.toLowerCase().includes(query) ||
-        m.snippet.toLowerCase().includes(query)
-      );
-    }
-    
-    return filtered;
-  };
+  const aiInsights = [
+    { title: 'Peak Activity', value: '9-11 AM', icon: Clock, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+    { title: 'Avg Response', value: '2.3 hours', icon: Activity, color: 'text-purple-400', bg: 'bg-purple-500/10' },
+    { title: 'AI Suggestions', value: '12 pending', icon: Brain, color: 'text-green-400', bg: 'bg-green-500/10' },
+    { title: 'Priority Score', value: '87/100', icon: Award, color: 'text-orange-400', bg: 'bg-orange-500/10' },
+  ]
 
-  const handleBulkAction = async (action: 'star' | 'unstar' | 'archive' | 'delete' | 'markRead' | 'markUnread') => {
-    if (selectedMessages.size === 0) return;
-    
-    const token = localStorage.getItem('access_token');
-    const promises = Array.from(selectedMessages).map(async (messageId) => {
-      try {
-        if (action === 'delete') {
-          await fetch(`${API_URL}/api/v1/messages/${messageId}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-        } else {
-          const message = messages.find(m => m.id === messageId);
-          if (!message) return;
-          
-          let newLabels = [...(message.labels || [])];
-          let isRead = message.is_read;
-          
-          switch (action) {
-            case 'star':
-              if (!newLabels.includes('STARRED')) newLabels.push('STARRED');
-              break;
-            case 'unstar':
-              newLabels = newLabels.filter(l => l !== 'STARRED');
-              break;
-            case 'archive':
-              newLabels = newLabels.filter(l => l !== 'INBOX');
-              break;
-            case 'markRead':
-              isRead = true;
-              break;
-            case 'markUnread':
-              isRead = false;
-              break;
-          }
-          
-          await fetch(`${API_URL}/api/v1/messages/${messageId}`, {
-            method: 'PATCH',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ is_read: true })
-          });
-        }
-      } catch (error) {
-        console.error(`Failed to ${action} message ${messageId}:`, error);
-      }
-    });
-    
-    await Promise.all(promises);
-    setSelectedMessages(new Set());
-    await fetchMessages();
-  };
+  const activityData = [
+    { day: 'Mon', emails: 45 },
+    { day: 'Tue', emails: 52 },
+    { day: 'Wed', emails: 38 },
+    { day: 'Thu', emails: 65 },
+    { day: 'Fri', emails: 48 },
+    { day: 'Sat', emails: 20 },
+    { day: 'Sun', emails: 15 },
+  ]
 
-  const filteredMessages = getFilteredMessages();
+  const maxEmails = Math.max(...activityData.map(d => d.emails))
+
+  const menuItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: null, route: '/dashboard' },
+    { id: 'inbox', label: 'Inbox', icon: Inbox, badge: '89', route: '/inbox' },
+    { id: 'starred', label: 'Starred', icon: Star, badge: null, route: '/inbox?folder=starred' },
+    { id: 'sent', label: 'Sent', icon: Send, badge: null, route: '/inbox?folder=sent' },
+    { id: 'drafts', label: 'Drafts', icon: FileText, badge: '3', route: '/inbox?folder=drafts' },
+    { id: 'archived', label: 'Archived', icon: Archive, badge: null, route: '/inbox?folder=archive' },
+    { id: 'spam', label: 'Spam', icon: Shield, badge: '12', route: '/inbox?folder=spam' },
+    { id: 'trash', label: 'Trash', icon: Trash2, badge: null, route: '/inbox?folder=trash' },
+  ]
+
+  const categoryItems = [
+    { id: 'analytics', label: 'Analytics', icon: BarChart3, route: '/analytics', color: 'text-blue-400' },
+    { id: 'contacts', label: 'Contacts', icon: Users, route: '/contacts', color: 'text-green-400' },
+    { id: 'ai-features', label: 'AI Features', icon: Sparkles, route: '/ai-features', color: 'text-purple-400' },
+    { id: 'settings', label: 'Settings', icon: Settings, route: '/settings', color: 'text-orange-400' },
+  ]
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950 relative overflow-hidden">
       {/* Animated Background */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }}></div>
+        <motion.div
+          className="absolute w-[1000px] h-[1000px] rounded-full opacity-20"
+          style={{
+            background: 'radial-gradient(circle, rgba(168,85,247,0.4) 0%, transparent 70%)',
+            left: mousePosition.x - 500,
+            top: mousePosition.y - 500,
+          }}
+          animate={{ left: mousePosition.x - 500, top: mousePosition.y - 500 }}
+          transition={{ type: 'spring', stiffness: 50, damping: 30 }}
+        />
+        <motion.div
+          className="absolute w-96 h-96 rounded-full bg-purple-500/10 blur-3xl"
+          animate={{ x: [0, 100, 0], y: [0, 50, 0], scale: [1, 1.2, 1] }}
+          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+          style={{ top: '10%', left: '10%' }}
+        />
       </div>
 
-      {/* Header */}
-      <motion.div 
-        initial={{ y: -100, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        className="sticky top-0 z-50 bg-gradient-to-r from-slate-900/80 via-purple-900/40 to-slate-900/80 backdrop-blur-2xl border-b border-purple-500/20 shadow-2xl"
-      >
-        <div className="container mx-auto px-6 py-5">
-          <div className="flex items-center justify-between">
-            {/* Logo Section */}
-            <div className="flex items-center gap-4">
-              <motion.div 
-                whileHover={{ scale: 1.05, rotate: 5 }}
-                whileTap={{ scale: 0.95 }}
-                className="relative group"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl blur-lg opacity-75 group-hover:opacity-100 transition-opacity"></div>
-                <div className="relative bg-gradient-to-br from-purple-600 to-pink-600 p-3 rounded-2xl shadow-lg">
-                  <Mail className="w-6 h-6 text-white" />
+      {/* Backdrop Overlay for Mobile */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar */}
+      <AnimatePresence mode="wait">
+        {sidebarOpen && (
+          <motion.aside
+            key="sidebar"
+            initial={{ x: -280, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -280, opacity: 0 }}
+            transition={{ 
+              type: "spring", 
+              damping: 25, 
+              stiffness: 200,
+              opacity: { duration: 0.2 }
+            }}
+            className="fixed left-0 top-0 h-screen w-64 glass border-r border-white/10 z-50 flex flex-col"
+          >
+            {/* Sidebar Header */}
+            <div className="p-6 border-b border-white/10">
+              <motion.div className="flex items-center justify-between mb-4" whileHover={{ scale: 1.02 }}>
+                <div className="flex items-center gap-3">
+                  <motion.div 
+                    className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl shadow-lg" 
+                    animate={{ rotate: [0, 5, 0, -5, 0] }} 
+                    transition={{ duration: 2, repeat: Infinity }}
+                    whileHover={{ rotate: 360, scale: 1.1 }}
+                  >
+                    <Mail className="w-6 h-6 text-white" />
+                  </motion.div>
+                  <div>
+                    <span className="text-lg font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent block">Mail Manager</span>
+                    <span className="text-xs text-gray-500">AI-Powered</span>
+                  </div>
                 </div>
               </motion.div>
-              <div>
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-white via-purple-200 to-pink-200 bg-clip-text text-transparent">
-                  Email AI Manager
-                </h1>
-                <p className="text-sm text-slate-400 flex items-center gap-2">
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                  Dashboard
-                </p>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-3">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleSync}
-                disabled={syncing}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-purple-300 border border-purple-500/30 hover:border-purple-400/50 rounded-xl transition-all backdrop-blur-sm flex items-center gap-2 shadow-lg hover:shadow-purple-500/20"
-              >
-                <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                <span className="font-medium">Sync</span>
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleLogout}
-                className="px-4 py-2 text-white hover:bg-slate-800/50 rounded-xl transition-all backdrop-blur-sm flex items-center gap-2 border border-slate-700/50 hover:border-slate-600"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="font-medium">Logout</span>
-              </motion.button>
-            </div>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Stats Bar */}
-      <motion.div 
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.1 }}
-        className="bg-gradient-to-r from-slate-800/40 via-purple-900/20 to-slate-800/40 backdrop-blur-xl border-b border-slate-700/30"
-      >
-        <div className="container mx-auto px-6 py-3">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>
-                <span className="text-slate-400">
-                  <span className="text-white font-semibold">{messages.length}</span> Total
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                <span className="text-slate-400">
-                  <span className="text-blue-400 font-semibold">{unreadCount}</span> Unread
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                <span className="text-slate-400">
-                  <span className="text-yellow-400 font-semibold">{highPriorityCount}</span> Priority
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Main Content */}
-      <div className="container mx-auto px-6 py-6 relative z-10">
-        {/* Sync Status Notifications */}
-        <AnimatePresence>
-          {syncSuccess && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="fixed top-20 right-8 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-2"
-            >
-              <Sparkles className="w-5 h-5" />
-              <span className="font-medium">Messages synced successfully!</span>
-            </motion.div>
-          )}
-          {syncError && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="fixed top-20 right-8 bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-2"
-            >
-              <AlertCircle className="w-5 h-5" />
-              <span className="font-medium">{syncError}</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Quick Actions Floating Button */}
-        <motion.button
-          whileHover={{ scale: 1.1, rotate: 90 }}
-          whileTap={{ scale: 0.9 }}
-          className="fixed bottom-8 right-8 w-16 h-16 bg-gradient-to-br from-purple-600 to-pink-600 rounded-2xl shadow-2xl shadow-purple-500/50 flex items-center justify-center z-50 hover:shadow-purple-500/70 transition-shadow"
-        >
-          <Edit className="w-6 h-6 text-white" />
-        </motion.button>
-
-        <div className="grid grid-cols-12 gap-6">
-          {/* Sidebar */}
-          <motion.div 
-            initial={{ x: -50, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="col-span-3 space-y-4"
-          >
-            {/* Folders Card */}
-            <div className="relative group">
-              <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl opacity-0 group-hover:opacity-20 blur transition-opacity"></div>
-              <div className="relative bg-gradient-to-br from-slate-800/60 to-slate-900/60 backdrop-blur-2xl border border-slate-700/30 rounded-2xl p-5 shadow-xl">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider">Folders</h3>
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-lg flex items-center justify-center">
-                  <Inbox className="w-4 h-4 text-purple-400" />
-                </div>
-              </div>
-              <div className="space-y-2">
-                {folders.map((folder, index) => (
-                  <motion.button
-                    key={folder.id}
-                    initial={{ x: -20, opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    transition={{ delay: 0.3 + index * 0.05 }}
-                    whileHover={{ scale: 1.02, x: 4 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setSelectedFolder(folder.id)}
-                    className={`group w-full flex items-center justify-between px-4 py-3 text-slate-300 rounded-xl transition-all border ${
-                      selectedFolder === folder.id
-                        ? 'bg-gradient-to-r from-purple-600/30 to-pink-600/30 border-purple-500/50 shadow-lg shadow-purple-500/20'
-                        : 'hover:bg-gradient-to-r hover:from-purple-600/20 hover:to-pink-600/20 border-transparent hover:border-purple-500/30'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
-                        selectedFolder === folder.id
-                          ? 'bg-purple-600/50'
-                          : 'bg-slate-700/50 group-hover:bg-purple-600/30'
-                      }`}>
-                        <folder.icon className={`w-4 h-4 transition-colors ${
-                          selectedFolder === folder.id ? 'text-white' : 'group-hover:text-purple-400'
-                        }`} />
-                      </div>
-                      <span className={`font-medium ${
-                        selectedFolder === folder.id ? 'text-white' : ''
-                      }`}>{folder.name}</span>
-                    </div>
-                    <span className={`text-xs font-semibold px-2 py-1 rounded-lg transition-all ${
-                      selectedFolder === folder.id
-                        ? 'text-white bg-purple-600/50'
-                        : 'text-slate-500 bg-slate-700/50 group-hover:bg-purple-600/30'
-                    }`}>{folder.count}</span>
-                  </motion.button>
-                ))}
-              </div>
-            </div>
-            </div>
-
-            {/* AI Stats Card */}
-            <motion.div
-              initial={{ x: -50, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: 0.4 }}
-              className="relative group"
-            >
-              {/* Gradient border effect */}
-              <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl opacity-20 group-hover:opacity-40 blur transition-opacity"></div>
-              <div className="relative bg-gradient-to-br from-purple-900/40 to-pink-900/40 backdrop-blur-2xl border border-purple-500/30 rounded-2xl p-5 shadow-xl">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-                  <Sparkles className="w-4 h-4 text-white" />
-                </div>
-                <h3 className="text-sm font-bold text-purple-300 uppercase tracking-wider">AI Insights</h3>
-              </div>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-400">Processed</span>
-                  <span className="text-lg font-bold text-white">{messages.length}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-400">High Priority</span>
-                  <span className="text-lg font-bold text-yellow-400">{highPriorityCount}</span>
-                </div>
-                <div className="w-full h-2 bg-slate-700/50 rounded-full overflow-hidden">
-                  <motion.div 
-                    initial={{ width: 0 }}
-                    animate={{ width: messages.length > 0 ? `${(highPriorityCount / messages.length) * 100}%` : '0%' }}
-                    className="h-full bg-gradient-to-r from-yellow-500 to-orange-500"
-                  />
-                </div>
-              </div>
-              <div className="mt-4 flex items-center gap-2 text-xs text-purple-400">
-                <Zap className="w-3 h-3" />
-                <span>AI Processing Active</span>
-              </div>
-              </div>
-            </motion.div>
-          </motion.div>
-
-          {/* Messages List */}
-          <motion.div
-            initial={{ y: 50, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.25 }}
-            className="col-span-5"
-          >
-            <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 backdrop-blur-2xl border border-slate-700/30 rounded-2xl overflow-hidden shadow-2xl">
-              <div className="p-5 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/80 to-purple-900/20">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-xl flex items-center justify-center">
-                      <Mail className="w-5 h-5 text-purple-400" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-bold text-white">Messages</h2>
-                      <p className="text-xs text-slate-500">All conversations</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="p-2 bg-slate-700/30 hover:bg-purple-600/20 rounded-lg transition-colors"
-                    >
-                      <Filter className="w-4 h-4 text-slate-400" />
-                    </motion.button>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="p-2 bg-slate-700/30 hover:bg-purple-600/20 rounded-lg transition-colors"
-                    >
-                      <SortDesc className="w-4 h-4 text-slate-400" />
-                    </motion.button>
-                    <div className="flex items-center gap-1 text-xs text-slate-400 ml-2">
-                      <Clock className="w-3 h-3" />
-                      <span>Real-time</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
               
-              <div className="divide-y divide-slate-700/50 max-h-[calc(100vh-250px)] overflow-y-auto">
-                {loading ? (
-                  <div className="space-y-3 p-4">
-                    {/* Skeleton Loading UI */}
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div key={i} className="animate-pulse bg-slate-800/50 rounded-lg p-4 space-y-3">
-                        <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 bg-slate-700 rounded-full"></div>
-                          <div className="flex-1 space-y-2">
-                            <div className="h-4 bg-slate-700 rounded w-1/4"></div>
-                            <div className="h-3 bg-slate-700 rounded w-3/4"></div>
-                          </div>
-                          <div className="h-4 w-16 bg-slate-700 rounded"></div>
-                        </div>
-                        <div className="space-y-2">
-                          <div className="h-3 bg-slate-700 rounded w-full"></div>
-                          <div className="h-3 bg-slate-700 rounded w-5/6"></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : filteredMessages.length === 0 ? (
-                  !hasToken ? (
-                    <div className="p-12 text-center">
-                      <div className="max-w-md mx-auto">
-                        <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-purple-500/50">
-                          <Mail className="w-10 h-10 text-white" />
-                        </div>
-                        <h3 className="text-2xl font-bold text-white mb-3">Connect Your Email</h3>
-                        <p className="text-slate-400 mb-6">Get started by connecting your email account to access your messages with AI-powered features.</p>
-                        <motion.a
-                          href="/connect"
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-purple-500/50 transition-shadow"
+              {/* Keyboard Shortcut Hint */}
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-3 px-3 py-2 bg-purple-500/10 border border-purple-500/20 rounded-lg"
+              >
+                <p className="text-xs text-gray-400 flex items-center gap-2">
+                  <span className="px-2 py-0.5 bg-white/10 rounded text-purple-300 font-mono">⌘B</span>
+                  <span>Toggle sidebar</span>
+                </p>
+              </motion.div>
+            </div>
+
+            {/* Scrollable Content Area */}
+            <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-purple-500/50 scrollbar-track-transparent">
+            {/* Search Bar */}
+            <div className="px-4 pt-4 pb-2">
+              <motion.div 
+                className="relative"
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+              >
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                <input
+                  type="text"
+                  placeholder="Search emails..."
+                  className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all outline-none"
+                />
+              </motion.div>
+            </div>
+
+            {/* Main Menu Items */}
+            <div className="p-4 pt-2">
+              <motion.p 
+                className="px-4 mb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.1 }}
+              >
+                <Mail className="w-3 h-3" />
+                Mail Folders
+              </motion.p>
+              <motion.div 
+                className="space-y-1" 
+                initial="hidden" 
+                animate="visible" 
+                variants={{ 
+                  visible: { 
+                    transition: { 
+                      staggerChildren: 0.08,
+                      delayChildren: 0.2
+                    } 
+                  }, 
+                  hidden: {} 
+                }}
+              >
+                {menuItems.map((item, index) => {
+                  const Icon = item.icon
+                  const isActive = activeMenu === item.id
+                  return (
+                    <motion.button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveMenu(item.id)
+                        if (item.route && item.route !== '/dashboard') {
+                          router.push(item.route)
+                        }
+                      }}
+                      variants={{ 
+                        visible: { 
+                          opacity: 1, 
+                          x: 0,
+                          transition: { 
+                            type: "spring",
+                            stiffness: 300,
+                            damping: 24
+                          }
+                        }, 
+                        hidden: { 
+                          opacity: 0, 
+                          x: -20 
+                        } 
+                      }}
+                      whileHover={{ scale: 1.03, x: 8 }}
+                      whileTap={{ scale: 0.97 }}
+                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all group ${
+                        isActive
+                          ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 shadow-lg shadow-purple-500/20'
+                          : 'hover:bg-white/5 border border-transparent hover:border-purple-500/20'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          whileHover={{ rotate: 360 }}
+                          transition={{ duration: 0.6 }}
                         >
-                          <Mail className="w-5 h-5" />
-                          Connect Email Account
-                        </motion.a>
-                        <div className="mt-6 flex items-center justify-center gap-4 text-sm text-slate-500">
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="w-4 h-4 text-purple-400" />
-                            <span>AI-Powered</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-yellow-400" />
-                            <span>Fast Sync</span>
-                          </div>
+                          <Icon className={`w-5 h-5 ${ isActive ? 'text-purple-400' : 'text-gray-400 group-hover:text-purple-300' }`} />
+                        </motion.div>
+                        <span className={`text-sm font-medium ${ isActive ? 'text-white' : 'text-gray-300 group-hover:text-white' }`}>
+                          {item.label}
+                        </span>
+                      </div>
+                      {item.badge && (
+                        <motion.span
+                          className="px-2 py-0.5 bg-purple-500/30 text-purple-300 rounded-full text-xs font-medium"
+                          animate={{ scale: [1, 1.1, 1] }}
+                          transition={{ duration: 2, repeat: Infinity }}
+                        >
+                          {item.badge}
+                        </motion.span>
+                      )}
+                    </motion.button>
+                  )
+                })}
+              </motion.div>
+
+              {/* Quick Access Section */}
+              <div className="mt-8">
+                <motion.p 
+                  className="px-4 mb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2"
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.5 }}
+                >
+                  <Boxes className="w-3 h-3" />
+                  Quick Access
+                </motion.p>
+                <motion.div 
+                  className="space-y-1" 
+                  initial="hidden" 
+                  animate="visible" 
+                  variants={{ 
+                    visible: { 
+                      transition: { 
+                        staggerChildren: 0.1, 
+                        delayChildren: 0.6 
+                      } 
+                    }, 
+                    hidden: {} 
+                  }}
+                >
+                  {categoryItems.map((item) => {
+                    const Icon = item.icon
+                    return (
+                      <Link key={item.id} href={item.route}>
+                        <motion.button
+                          variants={{ 
+                            visible: { 
+                              opacity: 1, 
+                              x: 0,
+                              transition: {
+                                type: "spring",
+                                stiffness: 300,
+                                damping: 24
+                              }
+                            }, 
+                            hidden: { 
+                              opacity: 0, 
+                              x: -20 
+                            } 
+                          }}
+                          whileHover={{ scale: 1.05, x: 8 }}
+                          whileTap={{ scale: 0.95 }}
+                          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition-all border border-transparent hover:border-purple-500/20 group"
+                        >
+                          <motion.div
+                            whileHover={{ rotate: 360, scale: 1.2 }}
+                            transition={{ duration: 0.6 }}
+                          >
+                            <Icon className={`w-5 h-5 ${item.color} group-hover:drop-shadow-lg`} />
+                          </motion.div>
+                          <span className="text-sm font-medium text-gray-300 group-hover:text-white">{item.label}</span>
+                          <ChevronRight className="w-4 h-4 text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </motion.button>
+                      </Link>
+                    )
+                  })}
+                </motion.div>
+              </div>
+
+              {/* Email Service Providers Section */}
+              <div className="mt-8 pb-4">
+                <motion.div 
+                  className="flex items-center justify-between px-4 mb-3"
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.8 }}
+                >
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Email Providers</p>
+                  <motion.button 
+                    whileHover={{ scale: 1.2, rotate: 90 }} 
+                    whileTap={{ scale: 0.9 }}
+                    className="p-1 hover:bg-white/10 rounded-lg transition-colors"
+                  >
+                    <svg className="w-3 h-3 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </motion.button>
+                </motion.div>
+                <motion.div 
+                  className="space-y-2" 
+                  initial="hidden" 
+                  animate="visible" 
+                  variants={{ 
+                    visible: { 
+                      transition: { 
+                        staggerChildren: 0.08, 
+                        delayChildren: 0.9 
+                      } 
+                    }, 
+                    hidden: {} 
+                  }}
+                >
+                  {/* Gmail */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-red-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-red-400 transition-colors">Gmail</p>
+                          <p className="text-[10px] text-gray-500">Connected • Syncing</p>
                         </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="p-12 text-center">
-                      <Mail className="w-12 h-12 mx-auto mb-4 opacity-50 text-slate-400" />
-                      <p className="text-slate-400 mb-4">No messages in {folders.find(f => f.id === selectedFolder)?.name}</p>
-                      {selectedFolder !== 'inbox' && messages.length > 0 ? (
-                        <div className="mb-4 p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg text-left max-w-lg mx-auto">
-                          <p className="text-sm text-blue-300 mb-2">💡 Tip:</p>
-                          <p className="text-xs text-slate-400">
-                            You have {messages.length} messages in INBOX, but none in {folders.find(f => f.id === selectedFolder)?.name}.
-                            Click "Sync Messages" to fetch messages from all Gmail folders including SENT, TRASH, SPAM, and DRAFT.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="mb-4 p-4 bg-slate-800/50 rounded-lg text-left max-w-lg mx-auto">
-                          <p className="text-xs text-slate-500 mb-2">Debug Info:</p>
-                          <p className="text-xs text-slate-400">Total messages: {messages.length}</p>
-                          <p className="text-xs text-slate-400">Current folder: {selectedFolder}</p>
-                          {messages.length > 0 && (
-                            <>
-                              <p className="text-xs text-slate-400 mt-2">Sample message labels:</p>
-                              <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
-                                {JSON.stringify(messages[0]?.labels, null, 2)}
-                              </pre>
-                              <p className="text-xs text-slate-400 mt-2">All unique labels in your messages:</p>
-                              <pre className="text-xs text-green-400 mt-1 overflow-auto max-h-32">
-                                {JSON.stringify([...new Set(messages.flatMap(m => m.labels || []))], null, 2)}
-                              </pre>
-                            </>
-                          )}
-                        </div>
-                      )}
-                      <motion.button
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={handleSync}
-                        disabled={syncing}
-                        className="px-4 py-2 bg-purple-600/20 text-purple-300 border border-purple-500/30 rounded-lg hover:bg-purple-600/30 transition-colors inline-flex items-center gap-2"
+                      <motion.div 
+                        className="flex items-center gap-2"
+                        initial={{ opacity: 1 }}
+                        animate={{ scale: [1, 1.2, 1] }}
+                        transition={{ 
+                          repeat: Infinity, 
+                          duration: 2,
+                          ease: "easeInOut"
+                        }}
                       >
-                        <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                        {syncing ? 'Syncing...' : 'Sync Messages from All Folders'}
+                        <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded-full text-[10px] font-medium">●</span>
+                      </motion.div>
+                    </div>
+                  </motion.div>
+
+                  {/* Outlook */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-blue-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-blue-400 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M24 7.387v9.226a.389.389 0 0 1-.389.387h-7.775v-1.937h6.194v-7.064l-6.194 4.516-6.193-4.516v7.064h6.193v1.937H.389A.389.389 0 0 1 0 16.613V7.387c0-.214.175-.387.389-.387h23.222c.214 0 .389.173.389.387zm-12 4.129l10.938-7.742H1.062L12 11.516z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-blue-400 transition-colors">Outlook</p>
+                          <p className="text-[10px] text-gray-500">Not connected</p>
+                        </div>
+                      </div>
+                      <motion.button
+                        whileHover={{ scale: 1.15, backgroundColor: "rgba(59, 130, 246, 0.4)" }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px] font-medium hover:bg-blue-500/30 transition-colors"
+                      >
+                        Connect
                       </motion.button>
                     </div>
-                  )
-                ) : (
-                  filteredMessages.map((message, index) => {
-                    const isSelected = selectedMessage?.id === message.id;
-                    const isUnread = !message.is_read;
-                    
-                    return (
+                  </motion.div>
+
+                  {/* Yahoo Mail */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-purple-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-600 to-purple-400 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.5 17.5h-2.8l-1.85-5.95-3.6 5.95H6.5l5.05-8.25L9.9 6.5h2.75l1.7 5.5 3.35-5.5h2.75l-4.75 7.75 1.8 3.25z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-purple-400 transition-colors">Yahoo Mail</p>
+                          <p className="text-[10px] text-gray-500">Not connected</p>
+                        </div>
+                      </div>
                       <motion.button
-                        key={message.id}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: index * 0.05 }}
-                        whileHover={{ scale: 1.01, x: 4 }}
-                        onClick={() => setSelectedMessage(message)}
-                        className={`group w-full p-4 text-left hover:bg-gradient-to-r hover:from-slate-700/50 hover:to-purple-900/30 transition-all border-l-2 ${
-                          isSelected ? 'bg-purple-900/30 border-l-purple-500' : isUnread ? 'bg-slate-700/20 border-l-blue-500/50' : 'border-l-transparent'
-                        }`}
+                        whileHover={{ scale: 1.15, backgroundColor: "rgba(168, 85, 247, 0.4)" }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="px-2 py-1 bg-purple-500/20 text-purple-400 rounded text-[10px] font-medium hover:bg-purple-500/30 transition-colors"
                       >
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1 min-w-0">
-                            <p className={`font-semibold truncate ${isUnread ? 'text-white' : 'text-slate-300'}`}>
-                              {message.from_email}
-                            </p>
-                            <p className={`text-sm truncate ${isUnread ? 'text-purple-300' : 'text-slate-400'}`}>
-                              {message.subject}
-                            </p>
+                        Connect
+                      </motion.button>
+                    </div>
+                  </motion.div>
+
+                  {/* ProtonMail */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-indigo-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-600 to-indigo-400 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm4.906 12.906l-3.5 3.5a.5.5 0 0 1-.707 0l-3.5-3.5a.5.5 0 0 1 0-.707l3.5-3.5a.5.5 0 0 1 .707 0l3.5 3.5a.5.5 0 0 1 0 .707z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-indigo-400 transition-colors">ProtonMail</p>
+                          <p className="text-[10px] text-gray-500">Not connected</p>
+                        </div>
+                      </div>
+                      <motion.button
+                        whileHover={{ scale: 1.15, backgroundColor: "rgba(99, 102, 241, 0.4)" }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="px-2 py-1 bg-indigo-500/20 text-indigo-400 rounded text-[10px] font-medium hover:bg-indigo-500/30 transition-colors"
+                      >
+                        Connect
+                      </motion.button>
+                    </div>
+                  </motion.div>
+
+                  {/* iCloud Mail */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-cyan-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M18.71 8.94a4.38 4.38 0 0 0-2.32-3.68 4.45 4.45 0 0 0-3.32-.53 4.54 4.54 0 0 0-6.58-1.25 4.5 4.5 0 0 0-1.48 5.15A4.39 4.39 0 0 0 2 12.78a4.5 4.5 0 0 0 3.23 4.33v.01A4.5 4.5 0 0 0 9.59 20h4.82a4.5 4.5 0 0 0 4.36-3.88 4.5 4.5 0 0 0-.06-7.18z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-cyan-400 transition-colors">iCloud Mail</p>
+                          <p className="text-[10px] text-gray-500">Not connected</p>
+                        </div>
+                      </div>
+                      <motion.button
+                        whileHover={{ scale: 1.15, backgroundColor: "rgba(6, 182, 212, 0.4)" }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded text-[10px] font-medium hover:bg-cyan-500/30 transition-colors"
+                      >
+                        Connect
+                      </motion.button>
+                    </div>
+                  </motion.div>
+
+                  {/* Zoho Mail */}
+                  <motion.div
+                    variants={{ 
+                      visible: { 
+                        opacity: 1, 
+                        y: 0,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 24
+                        }
+                      }, 
+                      hidden: { opacity: 0, y: 20 } 
+                    }}
+                    whileHover={{ scale: 1.03, x: 8 }}
+                    whileTap={{ scale: 0.97 }}
+                    className="px-3 py-3 rounded-lg hover:bg-white/5 transition-all border border-transparent hover:border-yellow-500/30 cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div
+                          className="w-9 h-9 rounded-lg bg-gradient-to-br from-yellow-600 to-orange-500 flex items-center justify-center flex-shrink-0 shadow-lg"
+                          whileHover={{ 
+                            rotate: [0, -10, 10, -10, 0],
+                            scale: 1.15
+                          }}
+                          transition={{ duration: 0.5 }}
+                        >
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5zm0 3.18l7 3.5v6.07c0 4.33-2.98 8.38-7 9.37-4.02-.99-7-5.04-7-9.37V8.68l7-3.5z"/>
+                          </svg>
+                        </motion.div>
+                        <div>
+                          <p className="text-sm font-semibold text-white group-hover:text-yellow-400 transition-colors">Zoho Mail</p>
+                          <p className="text-[10px] text-gray-500">Not connected</p>
+                        </div>
+                      </div>
+                      <motion.button
+                        whileHover={{ scale: 1.15, backgroundColor: "rgba(234, 179, 8, 0.4)" }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded text-[10px] font-medium hover:bg-yellow-500/30 transition-colors"
+                      >
+                        Connect
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              </div>
+            </div>
+            </div>
+            {/* End Scrollable Content Area */}
+
+            {/* Sidebar Footer */}
+            <motion.div 
+              className="flex-shrink-0 p-4 border-t border-white/10 glass backdrop-blur-xl space-y-3"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.2, duration: 0.3 }}
+            >
+              {/* Compose Button */}
+              <motion.button 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 1.3, type: "spring", stiffness: 300, damping: 20 }}
+                whileHover={{ 
+                  scale: 1.05, 
+                  boxShadow: "0 20px 25px -5px rgba(168, 85, 247, 0.3), 0 10px 10px -5px rgba(236, 72, 153, 0.3)"
+                }} 
+                whileTap={{ scale: 0.95 }}
+                onClick={() => router.push('/compose')}
+                className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 transition-all shadow-lg shadow-purple-500/25 cursor-pointer"
+              >
+                <motion.div
+                  animate={{ rotate: [0, -10, 10, -10, 0] }}
+                  transition={{ 
+                    repeat: Infinity, 
+                    duration: 3,
+                    ease: "easeInOut",
+                    repeatDelay: 2
+                  }}
+                >
+                  <Mail className="w-5 h-5 text-white" />
+                </motion.div>
+                <span className="text-sm font-semibold text-white">Compose</span>
+              </motion.button>
+
+              {/* User Profile */}
+              <motion.div 
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 1.4, type: "spring", stiffness: 300, damping: 24 }}
+                whileHover={{ scale: 1.03, x: 5 }}
+                whileTap={{ scale: 0.98 }}
+                className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-all cursor-pointer"
+              >
+                <motion.div
+                  className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold"
+                  whileHover={{ 
+                    rotate: 360,
+                    scale: 1.1
+                  }}
+                  transition={{ duration: 0.6, type: "spring", stiffness: 200 }}
+                >
+                  {user?.full_name?.charAt(0) || 'U'}
+                </motion.div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{user?.full_name || 'User'}</p>
+                  <p className="text-xs text-gray-400 truncate">{user?.email || ''}</p>
+                </div>
+              </motion.div>
+
+              {/* Help Button */}
+              <Link href="/help">
+                <motion.button 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 1.5, type: "spring", stiffness: 300, damping: 24 }}
+                  whileHover={{ scale: 1.03, x: 5 }} 
+                  whileTap={{ scale: 0.98 }} 
+                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl hover:bg-white/5 transition-all border border-transparent hover:border-purple-500/20 group"
+                >
+                  <motion.div
+                    whileHover={{ 
+                      rotate: [0, -15, 15, -15, 0],
+                      scale: 1.2
+                    }}
+                    transition={{ duration: 0.5 }}
+                  >
+                    <HelpCircle className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+                  </motion.div>
+                  <span className="text-sm font-medium text-gray-300 group-hover:text-white transition-colors">Help & Support</span>
+                </motion.button>
+              </Link>
+            </motion.div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      {/* Header */}
+      <motion.header 
+        className="glass border-b border-white/10 sticky top-0 z-40 backdrop-blur-xl" 
+        style={{ opacity: headerOpacity }}
+        animate={{ marginLeft: sidebarOpen ? '256px' : '0' }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      >
+        <div className="container mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            {/* Sidebar Toggle */}
+            <motion.button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-2 hover:bg-white/10 rounded-xl transition-colors mr-4"
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <motion.div animate={{ rotate: sidebarOpen ? 180 : 0 }} transition={{ duration: 0.3 }}>
+                <Menu className="w-6 h-6 text-gray-300" />
+              </motion.div>
+            </motion.button>
+
+            <motion.div className="flex items-center gap-3" whileHover={{ scale: 1.05 }}>
+              <motion.div animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }} transition={{ duration: 3, repeat: Infinity }}>
+                <Mail className="w-8 h-8 text-purple-400" />
+              </motion.div>
+              <span className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+                Mail Manager Pro
+              </span>
+            </motion.div>
+
+            <motion.div className="flex-1 max-w-2xl mx-8" initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
+              <div className="relative group">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-purple-400 transition-colors" />
+                <input type="text" placeholder="Search emails, contacts, or use AI commands..." className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white placeholder-gray-400 focus:outline-none focus:border-purple-500/50 focus:bg-white/10 transition-all" />
+              </div>
+            </motion.div>
+
+            <div className="flex items-center gap-3">
+              <motion.button className="relative p-3 hover:bg-white/10 rounded-xl transition-colors" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                <Bell className="w-6 h-6 text-gray-300" />
+                <motion.span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full" animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
+              </motion.button>
+
+              <motion.button className="p-3 hover:bg-white/10 rounded-xl transition-colors" whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.95 }}>
+                <Settings className="w-6 h-6 text-gray-300" />
+              </motion.button>
+
+              <motion.div className="flex items-center gap-3 ml-4 pl-4 border-l border-white/10 cursor-pointer" whileHover={{ scale: 1.05 }}>
+                <motion.div className="relative w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center font-bold text-white" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                  {firstName[0]}
+                  <motion.div className="absolute inset-0 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 opacity-50 blur-xl" animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
+                </motion.div>
+                <div className="text-left hidden lg:block">
+                  <p className="text-sm font-medium text-white">{user.full_name}</p>
+                  <p className="text-xs text-gray-400">{user.email}</p>
+                </div>
+              </motion.div>
+
+              <motion.button onClick={handleLogout} className="ml-2 p-3 hover:bg-red-500/20 rounded-xl transition-colors group" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                <LogOut className="w-6 h-6 text-gray-300 group-hover:text-red-400 transition-colors" />
+              </motion.button>
+            </div>
+          </div>
+        </div>
+      </motion.header>
+
+      {/* Main Content */}
+      <motion.div
+        className="relative z-10 px-6 py-8"
+        animate={{ marginLeft: sidebarOpen ? '256px' : '0', paddingRight: sidebarOpen ? '0' : '0' }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+        style={{ maxWidth: sidebarOpen ? 'calc(100vw - 256px)' : '100vw' }}
+      >
+        {/* Welcome Section */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-4xl font-bold text-white mb-2">
+                Welcome back, <span className="bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">{firstName}</span>! 👋
+              </h1>
+              <p className="text-gray-400 text-lg">Here's what's happening with your emails today</p>
+            </div>
+            <div className="flex gap-3">
+              <motion.button className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white transition-all" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                <Download className="w-4 h-4" />
+                <span className="hidden lg:inline">Export</span>
+              </motion.button>
+              <motion.button className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white transition-all" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                <Share2 className="w-4 h-4" />
+                <span className="hidden lg:inline">Share</span>
+              </motion.button>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Stats Grid */}
+        <motion.div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+          {statsDisplay.map((stat, index) => (
+            <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 * index }} whileHover={{ scale: 1.05, y: -5 }} className="relative group">
+              <div className="glass rounded-2xl p-6 border border-white/10 relative overflow-hidden">
+                <motion.div className={`absolute inset-0 bg-gradient-to-br ${stat.color} opacity-0 group-hover:opacity-10 transition-opacity`} animate={{ scale: [1, 1.2, 1], rotate: [0, 90, 0] }} transition={{ duration: 3, repeat: Infinity }} />
+                <div className="relative z-10">
+                  <div className="flex items-start justify-between mb-4">
+                    <motion.div className={`p-3 rounded-xl bg-gradient-to-br ${stat.color}`} whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                      <stat.icon className="w-6 h-6 text-white" />
+                    </motion.div>
+                    <div className="flex items-center gap-1 text-sm">
+                      <ArrowUp className="w-4 h-4 text-green-400" />
+                      <span className="text-green-400">{stat.change}</span>
+                    </div>
+                  </div>
+                  <motion.h3 className="text-3xl font-bold text-white mb-1" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.2 * index, type: "spring" }}>{stat.value}</motion.h3>
+                  <p className="text-gray-400 text-sm font-medium mb-1">{stat.label}</p>
+                  <p className="text-gray-500 text-xs">{stat.subtitle}</p>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Activity Chart */}
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-white mb-1">Email Activity</h2>
+                  <p className="text-sm text-gray-400">Last 7 days overview</p>
+                </div>
+                <div className="flex gap-2">
+                  {['day', 'week', 'month'].map((timeframe) => (
+                    <motion.button key={timeframe} onClick={() => setSelectedTimeframe(timeframe)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${selectedTimeframe === timeframe ? 'bg-purple-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                      {timeframe.charAt(0).toUpperCase() + timeframe.slice(1)}
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-end justify-between h-64 gap-4">
+                {activityData.map((data, index) => (
+                  <motion.div key={data.day} className="flex-1 flex flex-col items-center gap-2" initial={{ opacity: 0, scaleY: 0 }} animate={{ opacity: 1, scaleY: 1 }} transition={{ delay: 0.5 + index * 0.1 }}>
+                    <motion.div className="w-full bg-gradient-to-t from-purple-500 to-pink-500 rounded-t-lg relative group cursor-pointer" style={{ height: `${(data.emails / maxEmails) * 100}%` }} whileHover={{ scale: 1.1, y: -5 }}>
+                      <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 px-2 py-1 rounded text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                        {data.emails} emails
+                      </div>
+                    </motion.div>
+                    <span className="text-sm text-gray-400 font-medium">{data.day}</span>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+
+            {/* Recent Emails */}
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="glass rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-white mb-1">Recent Emails</h2>
+                  <p className="text-sm text-gray-400">Your latest inbox messages</p>
+                </div>
+                <motion.button className="flex items-center gap-2 text-purple-400 hover:text-purple-300 text-sm font-medium" whileHover={{ x: 5 }}>
+                  View all <ChevronRight className="w-4 h-4" />
+                </motion.button>
+              </div>
+
+              <div className="space-y-3">
+                {recentEmailsDisplay.map((email, index) => (
+                  <motion.div key={index} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 + index * 0.1 }} whileHover={{ scale: 1.02, x: 10 }} className="group relative">
+                    <div className={`p-4 rounded-xl cursor-pointer transition-all ${email.unread ? 'bg-purple-500/10 border border-purple-500/30' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}>
+                      <div className="flex items-start gap-4">
+                        <motion.div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                          {email.avatar}
+                        </motion.div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-4 mb-1">
+                            <div>
+                              <h4 className="text-white font-medium mb-1">{email.from}</h4>
+                              <p className={`text-sm ${email.unread ? 'text-white' : 'text-gray-400'} line-clamp-1`}>{email.subject}</p>
+                            </div>
+                            <span className="text-xs text-gray-500 whitespace-nowrap">{email.time}</span>
                           </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            {message.ml_data?.priority_score && message.ml_data.priority_score > 0.7 && (
-                              <AlertCircle className="w-4 h-4 text-red-400" />
+                          <div className="flex items-center gap-2 mt-2">
+                            {email.priority === 'high' && (
+                              <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full">High Priority</span>
+                            )}
+                            <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs rounded-full">{email.category}</span>
+                            {email.unread && (
+                              <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded-full">Unread</span>
                             )}
                           </div>
                         </div>
-                        <p className="text-sm text-slate-400 truncate">
-                          {message.snippet}
-                        </p>
-                        {message.ml_data?.summary && (
-                          <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="mt-2 flex items-center gap-2 text-xs bg-purple-500/10 border border-purple-500/20 rounded-lg px-2 py-1"
-                          >
-                            <Sparkles className="w-3 h-3 text-purple-400" />
-                            <span className="truncate text-purple-300">{message.ml_data.summary}</span>
-                          </motion.div>
-                        )}
-                      </motion.button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Message Detail */}
-          <motion.div
-            initial={{ x: 50, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="col-span-4"
-          >
-            {selectedMessage ? (
-              <motion.div 
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 backdrop-blur-2xl border border-purple-500/20 rounded-2xl overflow-hidden shadow-2xl"
-              >
-                <div className="p-6 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/80 to-purple-900/20">
-                  <h3 className="text-lg font-semibold text-white mb-2">{selectedMessage.subject}</h3>
-                  <p className="text-sm text-slate-400">{selectedMessage.from_email}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {new Date(selectedMessage.received_date).toLocaleString()}
-                  </p>
-                </div>
-
-                {selectedMessage.ml_data && (
-                  <motion.div
-                    initial={{ y: -20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    className="p-6 bg-gradient-to-br from-purple-900/30 to-pink-900/30 border-b border-purple-500/20"
-                  >
-                    <div className="flex items-center gap-2 mb-4">
-                      <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-                        <Sparkles className="w-4 h-4 text-white" />
                       </div>
-                      <h4 className="text-sm font-bold text-purple-300 uppercase tracking-wider">AI Insights</h4>
-                    </div>
-                    <div className="space-y-3">
-                      {selectedMessage.ml_data.summary && (
-                        <div className="bg-slate-800/50 rounded-lg p-3 border border-purple-500/20">
-                          <div className="text-xs font-semibold text-purple-400 mb-1">SUMMARY</div>
-                          <p className="text-sm text-slate-300">{selectedMessage.ml_data.summary}</p>
-                        </div>
-                      )}
-                      {selectedMessage.ml_data.sentiment && (
-                        <div className="bg-slate-800/50 rounded-lg p-3 border border-purple-500/20">
-                          <div className="text-xs font-semibold text-purple-400 mb-1">SENTIMENT</div>
-                          <p className="text-sm text-slate-300 capitalize">{selectedMessage.ml_data.sentiment}</p>
-                        </div>
-                      )}
-                      {selectedMessage.ml_data.intent && (
-                        <div className="bg-slate-800/50 rounded-lg p-3 border border-purple-500/20">
-                          <div className="text-xs font-semibold text-purple-400 mb-1">INTENT</div>
-                          <p className="text-sm text-slate-300 capitalize">{selectedMessage.ml_data.intent}</p>
-                        </div>
-                      )}
                     </div>
                   </motion.div>
-                )}
+                ))}
+              </div>
+            </motion.div>
+          </div>
 
-                <div className="p-6 max-h-[calc(100vh-450px)] overflow-y-auto">
-                  <div className="prose prose-invert max-w-none">
-                    <p className="text-slate-300 whitespace-pre-wrap">
-                      {selectedMessage.snippet}
-                    </p>
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Quick Actions */}
+            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }} className="glass rounded-2xl p-6 border border-white/10">
+              <h2 className="text-xl font-bold text-white mb-4">Quick Actions</h2>
+              <div className="grid grid-cols-2 gap-3">
+                {quickActions.map((action, index) => (
+                  <motion.button key={action.label} initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.4 + index * 0.1 }} whileHover={{ scale: 1.05, y: -5 }} whileTap={{ scale: 0.95 }} className="relative group">
+                    <div className={`${action.gradient} border border-white/10 rounded-xl p-4 text-center transition-all`}>
+                      <motion.div className={`w-12 h-12 mx-auto mb-3 rounded-lg bg-gradient-to-br ${action.color} flex items-center justify-center`} whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                        <action.icon className="w-6 h-6 text-white" />
+                      </motion.div>
+                      <p className="text-white font-medium text-sm mb-1">{action.label}</p>
+                      <p className="text-gray-400 text-xs">{action.description}</p>
+                    </div>
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+
+            {/* AI Insights */}
+            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }} className="glass rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center gap-2 mb-4">
+                <motion.div animate={{ rotate: 360 }} transition={{ duration: 3, repeat: Infinity, ease: "linear" }}>
+                  <Sparkles className="w-5 h-5 text-purple-400" />
+                </motion.div>
+                <h2 className="text-xl font-bold text-white">AI Insights</h2>
+              </div>
+              <div className="space-y-3">
+                {aiInsights.map((insight, index) => (
+                  <motion.div key={insight.title} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 + index * 0.1 }} whileHover={{ scale: 1.02, x: 5 }} className={`${insight.bg} border border-white/10 rounded-xl p-4 cursor-pointer transition-all`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <motion.div whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
+                          <insight.icon className={`w-5 h-5 ${insight.color}`} />
+                        </motion.div>
+                        <div>
+                          <p className="text-gray-400 text-sm">{insight.title}</p>
+                          <p className="text-white font-bold">{insight.value}</p>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-500" />
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+
+            {/* Performance */}
+            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }} className="glass rounded-2xl p-6 border border-white/10">
+              <h2 className="text-xl font-bold text-white mb-4">Performance</h2>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">Response Rate</span>
+                    <span className="text-sm text-white font-bold">94%</span>
+                  </div>
+                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div className="h-full bg-gradient-to-r from-green-500 to-emerald-500" initial={{ width: 0 }} animate={{ width: '94%' }} transition={{ duration: 1, delay: 0.6 }} />
                   </div>
                 </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 backdrop-blur-2xl border border-slate-700/30 rounded-2xl p-12 text-center"
-              >
-                <div className="w-24 h-24 bg-gradient-to-br from-slate-700/50 to-purple-900/30 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                  <Mail className="w-12 h-12 text-slate-600" />
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">Inbox Zero Progress</span>
+                    <span className="text-sm text-white font-bold">72%</span>
+                  </div>
+                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div className="h-full bg-gradient-to-r from-purple-500 to-pink-500" initial={{ width: 0 }} animate={{ width: '72%' }} transition={{ duration: 1, delay: 0.7 }} />
+                  </div>
                 </div>
-                <p className="text-slate-400 text-lg font-medium">Select a message to view details</p>
-                <p className="text-slate-500 text-sm mt-2">Choose from your messages on the left</p>
-              </motion.div>
-            )}
-          </motion.div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">AI Efficiency Boost</span>
+                    <span className="text-sm text-white font-bold">88%</span>
+                  </div>
+                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div className="h-full bg-gradient-to-r from-blue-500 to-cyan-500" initial={{ width: 0 }} animate={{ width: '88%' }} transition={{ duration: 1, delay: 0.8 }} />
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
         </div>
-      </div>
+      </motion.div>
     </div>
-  );
+  )
 }

@@ -1,375 +1,293 @@
-'use client';
+'use client'
 
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Users, Plus, Mail, Star, Trash2, Search, Edit, X } from 'lucide-react';
+import { useState, useEffect } from 'react'
+import DashboardLayout from '@/components/DashboardLayout'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Search, Mail, Phone, Building, MapPin, Star, MoreVertical, UserPlus, Trash2, Edit, X } from 'lucide-react'
 
 interface Contact {
-  id: string;
-  name: string;
-  email: string;
-  company?: string;
-  emailCount: number;
-  lastContact: string;
-  starred: boolean;
+  id: string
+  name: string
+  email: string
+  phone?: string
+  company?: string
+  location?: string
+  emailCount: number
+  lastContact: string
+  starred: boolean
+  avatar?: string
 }
 
-export default function Contacts() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showAddContact, setShowAddContact] = useState(false);
-  const [newContact, setNewContact] = useState({ name: '', email: '', company: '' });
+export default function ContactsPage() {
+  const [contacts, setContacts] = useState<Contact[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
+  const [filter, setFilter] = useState<'all' | 'starred'>('all')
 
   useEffect(() => {
-    fetchContacts();
-  }, []);
+    fetchContacts()
+  }, [])
 
   const fetchContacts = async () => {
+    setLoading(true)
     try {
-      setLoading(true);
-      const token = localStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await fetch('http://localhost:8003/api/v1/messages/', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
+      const token = localStorage.getItem('token')
+      const response = await fetch('http://localhost:8003/api/v1/contacts', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
       if (response.ok) {
-        const data = await response.json();
-        const messages = data.messages || [];
-        
-        // Extract unique contacts from messages
-        const contactMap: { [key: string]: Contact } = {};
-        messages.forEach((msg: any) => {
-          if (!contactMap[msg.from_email]) {
-            contactMap[msg.from_email] = {
-              id: msg.from_email,
-              name: msg.from_email.split('@')[0],
-              email: msg.from_email,
-              emailCount: 0,
-              lastContact: msg.received_date,
-              starred: false
-            };
-          }
-          contactMap[msg.from_email].emailCount++;
-          if (new Date(msg.received_date) > new Date(contactMap[msg.from_email].lastContact)) {
-            contactMap[msg.from_email].lastContact = msg.received_date;
-          }
-        });
-
-        setContacts(Object.values(contactMap).sort((a, b) => b.emailCount - a.emailCount));
+        const data = await response.json()
+        setContacts(data)
       }
     } catch (error) {
-      console.error('Failed to fetch contacts:', error);
+      console.error('Failed to fetch contacts:', error)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
-  const handleAddContact = () => {
-    if (newContact.name && newContact.email) {
-      const contact: Contact = {
-        id: Date.now().toString(),
-        name: newContact.name,
-        email: newContact.email,
-        company: newContact.company,
-        emailCount: 0,
-        lastContact: new Date().toISOString(),
-        starred: false
-      };
-      setContacts([contact, ...contacts]);
-      setNewContact({ name: '', email: '', company: '' });
-      setShowAddContact(false);
-    }
-  };
+  const filteredContacts = contacts
+    .filter((contact) => {
+      if (filter === 'starred' && !contact.starred) return false
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase()
+        return (
+          contact.name.toLowerCase().includes(query) ||
+          contact.email.toLowerCase().includes(query) ||
+          contact.company?.toLowerCase().includes(query)
+        )
+      }
+      return true
+    })
+    .sort((a, b) => b.emailCount - a.emailCount)
 
   const toggleStar = (contactId: string) => {
     setContacts(contacts.map(c => 
       c.id === contactId ? { ...c, starred: !c.starred } : c
-    ));
-  };
-
-  const deleteContact = (contactId: string) => {
-    setContacts(contacts.filter(c => c.id !== contactId));
-  };
-
-  const filteredContacts = contacts.filter(c =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.company?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    return `${Math.floor(diffDays / 30)} months ago`;
-  };
+    ))
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      {/* Header */}
-      <motion.header 
-        initial={{ y: -100 }}
-        animate={{ y: 0 }}
-        className="bg-slate-800/50 backdrop-blur-xl border-b border-purple-500/20 px-6 py-4"
-      >
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <div className="flex items-center gap-4">
-            <Users className="w-8 h-8 text-purple-400" />
-            <h1 className="text-2xl font-bold text-white">Contacts</h1>
+    <DashboardLayout>
+      <div className="flex-1 flex flex-col overflow-hidden h-[calc(100vh-80px)]">
+        {/* Top Bar */}
+        <div className="bg-black/30 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4 flex-1">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search contacts..."
+                  className="w-full pl-12 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setFilter('all')}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  filter === 'all' ? 'bg-purple-600 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setFilter('starred')}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  filter === 'starred' ? 'bg-purple-600 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                }`}
+              >
+                Starred
+              </button>
+              <button className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center gap-2">
+                <UserPlus className="w-4 h-4" />
+                Add Contact
+              </button>
+            </div>
           </div>
-          
-          <button
-            onClick={() => setShowAddContact(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors text-white font-medium"
-          >
-            <Plus className="w-5 h-5" />
-            <span>Add Contact</span>
-          </button>
-        </div>
-      </motion.header>
-
-      <div className="max-w-7xl mx-auto mt-8 px-6 pb-12">
-        {/* Search Bar */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-6"
-        >
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search contacts by name, email, or company..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-purple-500/20 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-purple-500"
-            />
-          </div>
-        </motion.div>
-
-        {/* Stats */}
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-slate-800/50 backdrop-blur-xl border border-purple-500/20 rounded-xl p-6"
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <Users className="w-6 h-6 text-purple-400" />
-              <span className="text-sm text-slate-400">Total Contacts</span>
-            </div>
-            <p className="text-3xl font-bold text-white">{contacts.length}</p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-slate-800/50 backdrop-blur-xl border border-yellow-500/20 rounded-xl p-6"
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <Star className="w-6 h-6 text-yellow-400" />
-              <span className="text-sm text-slate-400">Starred</span>
-            </div>
-            <p className="text-3xl font-bold text-white">
-              {contacts.filter(c => c.starred).length}
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="bg-slate-800/50 backdrop-blur-xl border border-blue-500/20 rounded-xl p-6"
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <Mail className="w-6 h-6 text-blue-400" />
-              <span className="text-sm text-slate-400">Total Emails</span>
-            </div>
-            <p className="text-3xl font-bold text-white">
-              {contacts.reduce((sum, c) => sum + c.emailCount, 0)}
-            </p>
-          </motion.div>
         </div>
 
-        {/* Contacts List */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="bg-slate-800/50 backdrop-blur-xl border border-purple-500/20 rounded-xl overflow-hidden"
-        >
+        {/* Contacts Grid/List */}
+        <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
-            <div className="p-12 text-center text-slate-400">
-              <p>Loading contacts...</p>
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                <p className="text-gray-400">Loading contacts...</p>
+              </div>
             </div>
           ) : filteredContacts.length === 0 ? (
-            <div className="p-12 text-center text-slate-400">
-              <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No contacts found</p>
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-xl font-semibold text-white mb-2">No contacts found</h3>
+                <p className="text-gray-400">Start by adding your first contact</p>
+              </div>
             </div>
           ) : (
-            <div className="divide-y divide-slate-700/50">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredContacts.map((contact, index) => (
                 <motion.div
                   key={contact.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="p-6 hover:bg-slate-700/30 transition-colors"
+                  className="glass rounded-xl p-6 border border-white/10 hover:border-purple-500/50 transition-all cursor-pointer group"
+                  onClick={() => setSelectedContact(contact)}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      {/* Avatar */}
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-white font-bold text-lg">
-                        {contact.name[0].toUpperCase()}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-semibold text-lg">
+                        {contact.name.split(' ').map(n => n[0]).join('')}
                       </div>
-
-                      {/* Info */}
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-white">{contact.name}</h3>
-                          {contact.starred && (
-                            <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                          )}
-                        </div>
-                        <p className="text-sm text-slate-400">{contact.email}</p>
-                        {contact.company && (
-                          <p className="text-xs text-slate-500">{contact.company}</p>
-                        )}
+                        <h3 className="text-white font-semibold group-hover:text-purple-400 transition-colors">
+                          {contact.name}
+                        </h3>
+                        <p className="text-sm text-gray-400">{contact.company || 'No company'}</p>
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        toggleStar(contact.id)
+                      }}
+                      className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                    >
+                      <Star className={`w-5 h-5 ${contact.starred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-400'}`} />
+                    </button>
+                  </div>
 
-                    <div className="flex items-center gap-6">
-                      {/* Stats */}
-                      <div className="text-right">
-                        <p className="text-sm text-slate-400">
-                          {contact.emailCount} {contact.emailCount === 1 ? 'email' : 'emails'}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          Last: {formatDate(contact.lastContact)}
-                        </p>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => toggleStar(contact.id)}
-                          className="p-2 hover:bg-slate-600/50 rounded-lg transition-colors"
-                          title="Star contact"
-                        >
-                          <Star className={`w-5 h-5 ${contact.starred ? 'text-yellow-400 fill-yellow-400' : 'text-slate-400'}`} />
-                        </button>
-                        <button
-                          onClick={() => window.location.href = `/dashboard?compose=${contact.email}`}
-                          className="p-2 hover:bg-slate-600/50 rounded-lg transition-colors"
-                          title="Send email"
-                        >
-                          <Mail className="w-5 h-5 text-slate-400" />
-                        </button>
-                        <button
-                          onClick={() => deleteContact(contact.id)}
-                          className="p-2 hover:bg-red-500/20 rounded-lg transition-colors"
-                          title="Delete contact"
-                        >
-                          <Trash2 className="w-5 h-5 text-red-400" />
-                        </button>
-                      </div>
+                  <div className="space-y-2 mb-4">
+                    <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <Mail className="w-4 h-4" />
+                      <span className="truncate">{contact.email}</span>
                     </div>
+                    {contact.phone && (
+                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                        <Phone className="w-4 h-4" />
+                        <span>{contact.phone}</span>
+                      </div>
+                    )}
+                    {contact.location && (
+                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                        <MapPin className="w-4 h-4" />
+                        <span>{contact.location}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-4 border-t border-white/10">
+                    <div className="text-sm">
+                      <span className="text-gray-400">Emails: </span>
+                      <span className="text-purple-400 font-semibold">{contact.emailCount}</span>
+                    </div>
+                    <div className="text-xs text-gray-500">{contact.lastContact}</div>
                   </div>
                 </motion.div>
               ))}
             </div>
           )}
-        </motion.div>
+        </div>
       </div>
 
-      {/* Add Contact Modal */}
-      {showAddContact && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+      {/* Contact Detail Modal */}
+      <AnimatePresence>
+        {selectedContact && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-slate-800 border border-purple-500/20 rounded-xl p-6 max-w-md w-full"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setSelectedContact(null)}
           >
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-white">Add New Contact</h2>
-              <button
-                onClick={() => setShowAddContact(false)}
-                className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-400" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Name *
-                </label>
-                <input
-                  type="text"
-                  value={newContact.name}
-                  onChange={(e) => setNewContact({ ...newContact, name: e.target.value })}
-                  className="w-full px-4 py-2 bg-slate-700/50 border border-purple-500/20 rounded-lg text-white focus:outline-none focus:border-purple-500"
-                  placeholder="John Doe"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Email *
-                </label>
-                <input
-                  type="email"
-                  value={newContact.email}
-                  onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
-                  className="w-full px-4 py-2 bg-slate-700/50 border border-purple-500/20 rounded-lg text-white focus:outline-none focus:border-purple-500"
-                  placeholder="john@example.com"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Company (optional)
-                </label>
-                <input
-                  type="text"
-                  value={newContact.company}
-                  onChange={(e) => setNewContact({ ...newContact, company: e.target.value })}
-                  className="w-full px-4 py-2 bg-slate-700/50 border border-purple-500/20 rounded-lg text-white focus:outline-none focus:border-purple-500"
-                  placeholder="Acme Inc."
-                />
-              </div>
-
-              <div className="flex gap-3 mt-6">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="glass rounded-2xl p-8 border border-white/10 max-w-2xl w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-semibold text-2xl">
+                    {selectedContact.name.split(' ').map(n => n[0]).join('')}
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">{selectedContact.name}</h2>
+                    <p className="text-gray-400">{selectedContact.company || 'No company'}</p>
+                  </div>
+                </div>
                 <button
-                  onClick={() => setShowAddContact(false)}
-                  className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors text-white"
+                  onClick={() => setSelectedContact(null)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
                 >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAddContact}
-                  disabled={!newContact.name || !newContact.email}
-                  className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Add Contact
+                  <X className="w-6 h-6 text-gray-400" />
                 </button>
               </div>
-            </div>
+
+              <div className="space-y-4 mb-6">
+                <div className="flex items-center gap-3 p-4 bg-white/5 rounded-lg">
+                  <Mail className="w-5 h-5 text-purple-400" />
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Email</p>
+                    <p className="text-white">{selectedContact.email}</p>
+                  </div>
+                </div>
+                {selectedContact.phone && (
+                  <div className="flex items-center gap-3 p-4 bg-white/5 rounded-lg">
+                    <Phone className="w-5 h-5 text-purple-400" />
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Phone</p>
+                      <p className="text-white">{selectedContact.phone}</p>
+                    </div>
+                  </div>
+                )}
+                {selectedContact.location && (
+                  <div className="flex items-center gap-3 p-4 bg-white/5 rounded-lg">
+                    <MapPin className="w-5 h-5 text-purple-400" />
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Location</p>
+                      <p className="text-white">{selectedContact.location}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="p-4 bg-white/5 rounded-lg">
+                  <p className="text-xs text-gray-500 mb-1">Total Emails</p>
+                  <p className="text-2xl font-bold text-purple-400">{selectedContact.emailCount}</p>
+                </div>
+                <div className="p-4 bg-white/5 rounded-lg">
+                  <p className="text-xs text-gray-500 mb-1">Last Contact</p>
+                  <p className="text-lg font-semibold text-white">{selectedContact.lastContact}</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button className="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center justify-center gap-2">
+                  <Mail className="w-5 h-5" />
+                  Send Email
+                </button>
+                <button className="px-4 py-3 bg-white/10 hover:bg-white/20 rounded-lg transition-colors">
+                  <Edit className="w-5 h-5" />
+                </button>
+                <button className="px-4 py-3 bg-red-600/20 hover:bg-red-600/30 rounded-lg transition-colors">
+                  <Trash2 className="w-5 h-5 text-red-400" />
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
-        </div>
-      )}
-    </div>
-  );
+        )}
+      </AnimatePresence>
+    </DashboardLayout>
+  )
 }

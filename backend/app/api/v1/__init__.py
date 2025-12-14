@@ -7,7 +7,8 @@ from app.api.v1.endpoints import (
     ai,
     ml,
     llm,
-    health
+    health,
+    email_providers
 )
 
 api_router = APIRouter()
@@ -19,3 +20,4 @@ api_router.include_router(ai.router, prefix="/ai", tags=["AI Services"])
 api_router.include_router(ml.router, prefix="/ml", tags=["ML Processing"])
 api_router.include_router(llm.router, prefix="/llm", tags=["LLM Integration"])
 api_router.include_router(health.router, prefix="/health", tags=["Health"])
+api_router.include_router(email_providers.router, tags=["Email Providers"])

@@ -47,27 +47,36 @@ def verify_token(token: str) -> dict:
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get current authenticated user from token"""
+    from app.core.database import AsyncSessionLocal
+    from app.models.models import User
+    from sqlalchemy import select
+    
     token = credentials.credentials
     payload = verify_token(token)
-    user_id: str = payload.get("sub")
-    if user_id is None:
+    email: str = payload.get("sub")
+    if email is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials"
         )
     
-    # Convert user_id to account_id (for consistency with the database)
-    # The sub field contains the account ID as a string
-    try:
-        account_id = int(user_id) if user_id and user_id.isdigit() else None
-    except (ValueError, AttributeError):
-        account_id = None
-    
-    return {
-        "user_id": user_id,
-        "account_id": account_id,
-        **payload
-    }
+    # Look up user in database to get actual user ID
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        return {
+            "user_id": user.id,  # Return integer user ID
+            "account_id": user.id,  # Same as user_id for compatibility
+            "email": email,
+            **payload
+        }
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

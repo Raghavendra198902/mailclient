@@ -14,6 +14,7 @@ export default function Navigation() {
 
   const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/inbox', label: 'Inbox', icon: Mail },
     { href: '/ai-features', label: 'AI Features', icon: Sparkles },
     { href: '/analytics', label: 'Analytics', icon: BarChart3 },
     { href: '/contacts', label: 'Contacts', icon: Users },

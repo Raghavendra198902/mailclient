@@ -81,3 +81,5 @@ htmlcov/
 *.tmp
 *.temp
 .cache/
+*.tar.gz
+frontend-backup-*

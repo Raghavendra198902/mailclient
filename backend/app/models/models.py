@@ -9,12 +9,30 @@ import uuid
 from app.core.database import Base
 
 
-class Account(Base):
-    """User account model"""
-    __tablename__ = "accounts"
+class User(Base):
+    """User authentication model"""
+    __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String, unique=True, nullable=False, index=True)
+    full_name = Column(String)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    accounts = relationship("Account", back_populates="user", cascade="all, delete-orphan")
+
+
+class Account(Base):
+    """Email account model (connected accounts)"""
+    __tablename__ = "accounts"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    email = Column(String, nullable=False, index=True)
     provider = Column(String, nullable=False)  # gmail, outlook, yahoo, imap
     is_active = Column(Boolean, default=True)
     
@@ -34,6 +52,7 @@ class Account(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
+    user = relationship("User", back_populates="accounts")
     messages = relationship("Message", back_populates="account", cascade="all, delete-orphan")
     inbox_health = relationship("InboxHealth", back_populates="account", cascade="all, delete-orphan")
     contacts = relationship("ContactIntelligence", back_populates="account", cascade="all, delete-orphan")
@@ -132,3 +151,22 @@ class InboxHealth(Base):
     
     # Relationships
     account = relationship("Account", back_populates="inbox_health")
+
+
+class EmailProvider(Base):
+    """Email provider credentials for syncing"""
+    __tablename__ = "email_providers"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    provider = Column(String, nullable=False)  # gmail, outlook, yahoo, protonmail, icloud, zoho
+    email = Column(String, nullable=False, index=True)
+    password = Column(Text, nullable=False)  # Encrypted password
+    app_password = Column(Text)  # App-specific password for Gmail/Outlook
+    status = Column(String, default="inactive")  # active, inactive, error
+    last_sync = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User")

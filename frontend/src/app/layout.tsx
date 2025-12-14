@@ -1,11 +1,12 @@
 import type { Metadata } from 'next'
+import { Inter } from 'next/font/google'
 import './globals.css'
-import { Providers } from './providers'
-import Navigation from '@/components/Navigation'
+
+const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Universal Email AI Manager',
-  description: 'Advanced email management for Gmail, Outlook, Yahoo, IMAP with AI/ML automation',
+  title: 'Mail Manager Pro - Enterprise Email Management',
+  description: 'AI-powered enterprise email management platform with advanced automation and security',
 }
 
 export default function RootLayout({
@@ -15,12 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <Providers>
-          <Navigation />
-          {children}
-        </Providers>
-      </body>
+      <body className={inter.className}>{children}</body>
     </html>
   )
 }

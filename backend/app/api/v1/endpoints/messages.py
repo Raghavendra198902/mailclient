@@ -42,13 +42,37 @@ class MessageList(BaseModel):
 
 class MessageCreate(BaseModel):
     to_email: str
+    cc_email: Optional[str] = None
+    bcc_email: Optional[str] = None
     subject: str
     body: str
+    body_html: Optional[str] = None
+    attachments: Optional[List[dict]] = None  # [{"filename": "file.pdf", "content": "base64...", "mimetype": "application/pdf"}]
+    is_draft: bool = False
+    scheduled_time: Optional[datetime] = None
 
 
 class MessageUpdate(BaseModel):
     is_read: Optional[bool] = None
     labels: Optional[List[str]] = None
+
+
+class DraftCreate(BaseModel):
+    to_email: Optional[str] = None
+    cc_email: Optional[str] = None
+    bcc_email: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    body_html: Optional[str] = None
+
+
+class DraftUpdate(BaseModel):
+    to_email: Optional[str] = None
+    cc_email: Optional[str] = None
+    bcc_email: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    body_html: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -319,7 +343,7 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Send a new email"""
+    """Send a new email with support for cc, bcc, attachments, HTML body, drafts, and scheduling"""
     try:
         result = await db.execute(
             select(Account).where(Account.id == current_user.get("account_id"))
@@ -328,6 +352,49 @@ async def send_message(
         
         if not account:
             raise HTTPException(status_code=404, detail="No email account connected")
+        
+        # If this is a draft, save it and return
+        if message.is_draft:
+            draft_message = Message(
+                account_id=account.id,
+                subject=message.subject,
+                from_email=account.email,
+                to_email=message.to_email,
+                body_text=message.body,
+                body_html=message.body_html,
+                received_date=datetime.now(),
+                is_read=True,
+                labels=["DRAFT"]
+            )
+            db.add(draft_message)
+            await db.commit()
+            await db.refresh(draft_message)
+            return {
+                "status": "draft_saved",
+                "message": "Draft saved successfully",
+                "draft_id": str(draft_message.id)
+            }
+        
+        # If scheduled, save for later sending
+        if message.scheduled_time and message.scheduled_time > datetime.now():
+            scheduled_message = Message(
+                account_id=account.id,
+                subject=message.subject,
+                from_email=account.email,
+                to_email=message.to_email,
+                body_text=message.body,
+                body_html=message.body_html,
+                received_date=message.scheduled_time,
+                is_read=True,
+                labels=["SCHEDULED"]
+            )
+            db.add(scheduled_message)
+            await db.commit()
+            return {
+                "status": "scheduled",
+                "message": f"Email scheduled for {message.scheduled_time.isoformat()}",
+                "scheduled_id": str(scheduled_message.id)
+            }
         
         email_service = get_email_service()
         
@@ -346,18 +413,43 @@ async def send_message(
         provider = email_service.get_provider(account.provider)
         await provider.authenticate(credentials)
         
+        # Send with enhanced parameters
         success = await provider.send_message(
             to=message.to_email,
             subject=message.subject,
-            body=message.body
+            body=message.body,
+            cc=message.cc_email,
+            bcc=message.bcc_email,
+            body_html=message.body_html,
+            attachments=message.attachments
         )
         
         if success:
-            return {"status": "success", "message": "Email sent successfully"}
+            # Save sent message to database
+            sent_message = Message(
+                account_id=account.id,
+                subject=message.subject,
+                from_email=account.email,
+                to_email=message.to_email,
+                body_text=message.body,
+                body_html=message.body_html,
+                received_date=datetime.now(),
+                is_read=True,
+                labels=["SENT"]
+            )
+            db.add(sent_message)
+            await db.commit()
+            
+            return {
+                "status": "success",
+                "message": "Email sent successfully",
+                "sent_id": str(sent_message.id)
+            }
         else:
             raise HTTPException(status_code=500, detail="Failed to send email")
             
     except Exception as e:
+        logger.error(f"Failed to send message: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
 
 
@@ -419,6 +511,112 @@ async def delete_message(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete message: {str(e)}")
+
+
+@router.post("/drafts")
+async def save_draft(
+    draft: DraftCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Auto-save email draft"""
+    try:
+        result = await db.execute(
+            select(Account).where(Account.id == current_user.get("account_id"))
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            raise HTTPException(status_code=404, detail="No email account connected")
+        
+        draft_message = Message(
+            account_id=account.id,
+            subject=draft.subject or "",
+            from_email=account.email,
+            to_email=draft.to_email or "",
+            body_text=draft.body or "",
+            body_html=draft.body_html,
+            received_date=datetime.now(),
+            is_read=True,
+            labels=["DRAFT"]
+        )
+        db.add(draft_message)
+        await db.commit()
+        await db.refresh(draft_message)
+        
+        return {
+            "status": "success",
+            "message": "Draft saved",
+            "draft_id": str(draft_message.id)
+        }
+    except Exception as e:
+        logger.error(f"Failed to save draft: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {str(e)}")
+
+
+@router.patch("/drafts/{draft_id}")
+async def update_draft(
+    draft_id: int,
+    draft: DraftUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update existing draft"""
+    try:
+        result = await db.execute(
+            select(Message).where(
+                Message.id == draft_id,
+                Message.account_id == current_user.get("account_id")
+            )
+        )
+        message = result.scalar_one_or_none()
+        
+        if not message or "DRAFT" not in (message.labels or []):
+            raise HTTPException(status_code=404, detail="Draft not found")
+        
+        if draft.to_email is not None:
+            message.to_email = draft.to_email
+        if draft.subject is not None:
+            message.subject = draft.subject
+        if draft.body is not None:
+            message.body_text = draft.body
+        if draft.body_html is not None:
+            message.body_html = draft.body_html
+        
+        await db.commit()
+        
+        return {"status": "success", "message": "Draft updated"}
+    except Exception as e:
+        logger.error(f"Failed to update draft: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update draft: {str(e)}")
+
+
+@router.delete("/drafts/{draft_id}")
+async def delete_draft(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete draft"""
+    try:
+        result = await db.execute(
+            select(Message).where(
+                Message.id == draft_id,
+                Message.account_id == current_user.get("account_id")
+            )
+        )
+        message = result.scalar_one_or_none()
+        
+        if not message or "DRAFT" not in (message.labels or []):
+            raise HTTPException(status_code=404, detail="Draft not found")
+        
+        await db.delete(message)
+        await db.commit()
+        
+        return {"status": "success", "message": "Draft deleted"}
+    except Exception as e:
+        logger.error(f"Failed to delete draft: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete draft: {str(e)}")
 
 
 @router.post("/search", response_model=MessageList)
@@ -533,3 +731,132 @@ async def search_messages(
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@router.get("/templates")
+async def get_email_templates():
+    """Get predefined email templates"""
+    templates = {
+        "business": [
+            {
+                "id": "meeting_request",
+                "name": "Meeting Request",
+                "subject": "Meeting Request: [Topic]",
+                "body": "Hi [Name],\n\nI hope this email finds you well. I would like to schedule a meeting to discuss [topic].\n\nWould you be available for a [duration] meeting on [date] at [time]?\n\nPlease let me know if this works for you or suggest an alternative time.\n\nBest regards,\n[Your Name]",
+                "category": "business"
+            },
+            {
+                "id": "follow_up",
+                "name": "Follow Up",
+                "subject": "Following Up: [Previous Topic]",
+                "body": "Hi [Name],\n\nI wanted to follow up on my previous email regarding [topic].\n\nHave you had a chance to review it? I would appreciate any feedback or next steps.\n\nLooking forward to hearing from you.\n\nBest regards,\n[Your Name]",
+                "category": "business"
+            },
+            {
+                "id": "introduction",
+                "name": "Business Introduction",
+                "subject": "Introduction: [Your Company]",
+                "body": "Dear [Name],\n\nI hope this email finds you well. My name is [Your Name] and I work at [Company].\n\nI'm reaching out because [reason for contact]. I believe we could [mutual benefit].\n\nWould you be open to a brief call to explore this further?\n\nBest regards,\n[Your Name]",
+                "category": "business"
+            },
+            {
+                "id": "proposal",
+                "name": "Project Proposal",
+                "subject": "Proposal: [Project Name]",
+                "body": "Dear [Name],\n\nThank you for considering our proposal for [project name].\n\nAttached you will find our detailed proposal outlining:\n- Project scope\n- Timeline\n- Budget\n- Deliverables\n\nI'm available to discuss any questions you may have.\n\nBest regards,\n[Your Name]",
+                "category": "business"
+            }
+        ],
+        "personal": [
+            {
+                "id": "thank_you",
+                "name": "Thank You Note",
+                "subject": "Thank You!",
+                "body": "Hi [Name],\n\nI wanted to take a moment to thank you for [reason]. Your [help/support/guidance] has been invaluable.\n\nI truly appreciate your time and effort.\n\nWarm regards,\n[Your Name]",
+                "category": "personal"
+            },
+            {
+                "id": "invitation",
+                "name": "Event Invitation",
+                "subject": "You're Invited: [Event Name]",
+                "body": "Hi [Name],\n\nI'm excited to invite you to [event name] on [date] at [time].\n\nLocation: [venue]\n\nPlease RSVP by [date] so we can finalize arrangements.\n\nHope to see you there!\n\nBest,\n[Your Name]",
+                "category": "personal"
+            },
+            {
+                "id": "congratulations",
+                "name": "Congratulations",
+                "subject": "Congratulations!",
+                "body": "Hi [Name],\n\nCongratulations on [achievement]! This is a wonderful accomplishment and well-deserved.\n\nWishing you continued success!\n\nWarm regards,\n[Your Name]",
+                "category": "personal"
+            },
+            {
+                "id": "apology",
+                "name": "Apology",
+                "subject": "My Apologies",
+                "body": "Hi [Name],\n\nI want to sincerely apologize for [situation]. I understand this may have caused [impact].\n\nI take full responsibility and am committed to [resolution].\n\nThank you for your understanding.\n\nSincerely,\n[Your Name]",
+                "category": "personal"
+            }
+        ],
+        "support": [
+            {
+                "id": "ticket_response",
+                "name": "Support Ticket Response",
+                "subject": "Re: Support Ticket #[Number]",
+                "body": "Hello [Name],\n\nThank you for contacting support. I've reviewed your ticket regarding [issue].\n\n[Solution or next steps]\n\nPlease let me know if this resolves your issue or if you need further assistance.\n\nBest regards,\n[Your Name]\nSupport Team",
+                "category": "support"
+            },
+            {
+                "id": "issue_resolved",
+                "name": "Issue Resolved",
+                "subject": "Issue Resolved: [Ticket #]",
+                "body": "Hello [Name],\n\nGreat news! Your issue has been resolved.\n\nSummary of resolution:\n[Details]\n\nIf you experience any further problems, please don't hesitate to reach out.\n\nBest regards,\n[Your Name]\nSupport Team",
+                "category": "support"
+            },
+            {
+                "id": "status_update",
+                "name": "Status Update",
+                "subject": "Status Update: [Ticket #]",
+                "body": "Hello [Name],\n\nI wanted to provide an update on your support ticket.\n\nCurrent status: [Status]\nProgress: [Progress details]\nExpected resolution: [Timeframe]\n\nThank you for your patience.\n\nBest regards,\n[Your Name]\nSupport Team",
+                "category": "support"
+            },
+            {
+                "id": "escalation",
+                "name": "Issue Escalation",
+                "subject": "Your Issue Has Been Escalated",
+                "body": "Hello [Name],\n\nYour support ticket has been escalated to our senior team for further investigation.\n\nTicket #: [Number]\nIssue: [Description]\n\nYou can expect an update within [timeframe].\n\nThank you for your patience.\n\nBest regards,\n[Your Name]\nSupport Team",
+                "category": "support"
+            }
+        ],
+        "sales": [
+            {
+                "id": "cold_outreach",
+                "name": "Cold Outreach",
+                "subject": "Quick Question About [Company]",
+                "body": "Hi [Name],\n\nI noticed [observation about their company] and thought you might be interested in [your solution].\n\nWe help companies like yours [key benefit]. Would you be open to a brief 15-minute call to explore if this could be valuable for [Company]?\n\nBest regards,\n[Your Name]",
+                "category": "sales"
+            },
+            {
+                "id": "quote",
+                "name": "Price Quote",
+                "subject": "Quote for [Product/Service]",
+                "body": "Hi [Name],\n\nThank you for your interest in [product/service].\n\nBased on our discussion, here's a customized quote:\n\n[Quote details]\n- Item: [Description]\n- Price: [Amount]\n- Timeline: [Duration]\n\nThis quote is valid until [date].\n\nLet me know if you have any questions!\n\nBest regards,\n[Your Name]",
+                "category": "sales"
+            },
+            {
+                "id": "demo_follow_up",
+                "name": "Demo Follow-Up",
+                "subject": "Thanks for Joining Our Demo!",
+                "body": "Hi [Name],\n\nThank you for attending our demo today! I hope you found it valuable.\n\nKey takeaways:\n- [Point 1]\n- [Point 2]\n- [Point 3]\n\nWhat are your thoughts on next steps? I'm happy to arrange a follow-up call or answer any questions.\n\nBest regards,\n[Your Name]",
+                "category": "sales"
+            },
+            {
+                "id": "closing",
+                "name": "Closing Email",
+                "subject": "Ready to Get Started?",
+                "body": "Hi [Name],\n\nBased on our conversations, I believe [product/service] is a great fit for [Company].\n\nTo move forward, I've prepared:\n- Contract for review\n- Implementation timeline\n- Onboarding plan\n\nAre you ready to get started? I'm here to answer any final questions.\n\nBest regards,\n[Your Name]",
+                "category": "sales"
+            }
+        ]
+    }
+    
+    return {"templates": templates}

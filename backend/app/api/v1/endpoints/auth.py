@@ -2,22 +2,168 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.security import create_access_token, encrypt_password, decrypt_password
 from app.core.config import settings
 from app.services.universal_email_service import get_email_service
-from app.models.models import Account
+from app.models.models import Account, User
 from sqlalchemy import select
 
 router = APIRouter()
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user: dict
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    is_active: bool
+    created_at: datetime
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """Get current authenticated user"""
+    from jose import JWTError, jwt
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+@router.post("/register", response_model=TokenResponse)
+async def register(
+    request: RegisterRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Register a new user"""
+    # Check if user exists
+    result = await db.execute(select(User).where(User.email == request.email))
+    existing_user = result.scalar_one_or_none()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create new user
+    hashed_password = get_password_hash(request.password)
+    new_user = User(
+        email=request.email,
+        full_name=request.full_name,
+        hashed_password=hashed_password
+    )
+    
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": new_user.email})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "full_name": new_user.full_name,
+            "is_active": new_user.is_active,
+            "created_at": new_user.created_at
+        }
+    }
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db)
+):
+    """Login user"""
+    result = await db.execute(select(User).where(User.email == form_data.username))
+    user = result.scalar_one_or_none()
+    
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user"
+        )
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": user.email})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "is_active": user.is_active,
+            "created_at": user.created_at
+        }
+    }
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current user info"""
+    return current_user
 
 
 class ConnectRequest(BaseModel):
@@ -98,6 +244,98 @@ async def gmail_callback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Authentication failed: {str(e)}"
+        )
+
+
+@router.get("/dev/token/{account_id}")
+async def dev_generate_token(
+    account_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Development endpoint: Generate test token for existing account.
+    REMOVE IN PRODUCTION!
+    """
+    result = await db.execute(
+        select(Account).where(Account.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Account {account_id} not found"
+        )
+    
+    access_token = create_access_token(data={
+        "sub": str(account.id),
+        "account_id": account.id,
+        "email": account.email,
+        "provider": account.provider
+    })
+    
+    return {
+        "access_token": access_token,
+        "account_id": account.id,
+        "email": account.email,
+        "frontend_command": f"localStorage.setItem('access_token', '{access_token}')"
+    }
+
+
+@router.get("/status")
+async def auth_status(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Check authentication status for all accounts.
+    Returns accounts that need re-authentication.
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        result = await db.execute(
+            select(Account).where(Account.is_active == True)
+        )
+        accounts = result.scalars().all()
+        
+        account_statuses = []
+        for account in accounts:
+            needs_reauth = False
+            reason = None
+            
+            # Check token expiry
+            if account.token_expires_at:
+                # Warn if token expires within 7 days
+                if account.token_expires_at < datetime.utcnow() + timedelta(days=7):
+                    needs_reauth = True
+                    reason = "Token expiring soon"
+                    
+                if account.token_expires_at < datetime.utcnow():
+                    needs_reauth = True
+                    reason = "Token expired"
+            
+            # Check if refresh token is missing
+            if account.provider in ['gmail', 'outlook'] and not account.refresh_token:
+                needs_reauth = True
+                reason = "No refresh token"
+            
+            account_statuses.append({
+                "id": account.id,
+                "email": account.email,
+                "provider": account.provider,
+                "needs_reauth": needs_reauth,
+                "reason": reason,
+                "expires_at": account.token_expires_at.isoformat() if account.token_expires_at else None
+            })
+        
+        return {
+            "accounts": account_statuses,
+            "any_needs_reauth": any(a["needs_reauth"] for a in account_statuses)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check auth status: {str(e)}"
         )
 
 

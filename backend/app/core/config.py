@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     
     # Database
-    DATABASE_URL: str = "postgresql://gmail_user:gmail_pass@localhost:5432/gmail_ai"
+    DATABASE_URL: str = "postgresql+asyncpg://gmail_user:gmail_pass@postgres:5432/gmail_ai"
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     GOOGLE_MODEL: str = "gemini-1.5-flash"
     OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    OLLAMA_URL: str = "http://localhost:11434"
     LOCAL_MODEL: str = "llama3.2"
     HUGGINGFACE_TOKEN: str = ""
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
@@ -53,6 +54,8 @@ class Settings(BaseSettings):
     
     # Vector DB
     VECTOR_DB_PATH: str = "./data/faiss_index"
+    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: str = ""
     
     # ML Pipeline
     ML_BATCH_SIZE: int = 32
